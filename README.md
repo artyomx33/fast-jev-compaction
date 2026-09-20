@@ -1,5 +1,35 @@
 # fast-jev-compaction
 
+## Fleet fork
+
+This is [artyomx33's public fork](https://github.com/artyomx33/fast-jev-compaction) of
+[tamaratran/fast-jev-compaction](https://github.com/tamaratran/fast-jev-compaction),
+with optional evidence-oriented questions and a candidate-only drop guard.
+Upstream attribution and the MIT license are preserved.
+
+**Status: experimental.** The three reviewed guard/plugin integration defects are fixed;
+41 library/hook tests and type checks pass. A real Claude session continuation test
+is still pending. Publishing this fork does not enable compaction in any agent.
+Codex and other fleet runtimes need separately verified adapters.
+
+To obtain **this version**, clone and build this repository:
+
+```sh
+git clone https://github.com/artyomx33/fast-jev-compaction.git
+cd fast-jev-compaction
+npm ci
+npm run build
+npm test
+```
+
+The npm registry command below belongs to upstream; it does **not** install this fork.
+For the Claude adapter, see [hooks/README.md](hooks/README.md).
+The new options remain opt-in: `questionStyle: 'evidence'`, `maxDropRatio: 0.8`.
+Read [the monthly upstream monitor](docs/UPSTREAM-MONITOR.md) for update checks;
+updates require review and are never applied automatically.
+
+## Upstream overview
+
 Claude Code plugin that replaces the compaction summary with Jev decisions:
 every tool call and result is scored in one fast request, stale ones are
 dropped or truncated, everything kept stays verbatim. Also usable as an npm
@@ -119,8 +149,9 @@ stage was needed, and the number of requests.
 
 ## Question wording, and refusing a bad compaction
 
-Both options are **off by default**: with `maxDropRatio: 1` and `questionStyle: 'default'` the output is
-byte-identical to a build without them, and a test asserts it. Both are also exposed as plugin
+Both options are **off by default**. Tests compare this implementation's omitted and explicit defaults
+and check the default question wording; they do not establish byte-for-byte equivalence to a frozen
+upstream build. The result also adds a `compacted` field. Both options are exposed as plugin
 `userConfig` values, and the hook only forwards them when they are set.
 
 **Question wording.** `questionStyle: 'evidence'` asks whether a future reader needs the call to trust or
@@ -136,7 +167,8 @@ const result = await compactMessages(transcript, { questionStyle: 'evidence' });
 **Max-drop guard.** `maxDropRatio` is a quantity floor, not a quality check: it counts survivors and never
 looks at what they contain. It is computed over **candidates only** — pinned calls were never at risk, so
 counting them as survivors would let every real candidate go. When the number of calls kept by decision
-falls below `max(ceil((1 - maxDropRatio) * candidates), 3)` the compaction is refused:
+falls below `max(ceil((1 - maxDropRatio) * candidates), 3)` the compaction is refused.
+For fewer than three candidates, only the rounded share applies:
 
 ```ts
 const result = await compactMessages(transcript, { maxDropRatio: 0.8 });
