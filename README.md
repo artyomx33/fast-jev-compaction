@@ -28,6 +28,14 @@ The new options remain opt-in: `questionStyle: 'evidence'`, `maxDropRatio: 0.8`.
 Read [the monthly upstream monitor](docs/UPSTREAM-MONITOR.md) for update checks;
 updates require review and are never applied automatically.
 
+## Codex version
+
+[The Codex adapter](codex/README.md) adds Jev-selected, quoted tool evidence after native
+compaction. It shows Jev bounded excerpts of actual results. It does not replace native history.
+Verified on Codex CLI0.155.1:64tests pass and a real hook run delivered2,683characters of evidence.
+Native-only and assisted recall both scored5/5 on the controlled task; improved recall is unproven.
+See the [verification receipt](docs/verify/2026-09-20-codex-carryover.md).
+
 ## Upstream overview
 
 Claude Code plugin that replaces the compaction summary with Jev decisions:
