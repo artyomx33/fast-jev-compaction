@@ -52,6 +52,18 @@
       "description": "Characters of a tool result kept when Jev decides its full output is no longer needed; 0 keeps only the note.",
       "default": 300
     },
+    "maxDropRatio": {
+      "type": "number",
+      "title": "Maximum drop ratio",
+      "description": "Refuse the compaction when more than this share of candidate tool calls would be removed; 1 disables the guard.",
+      "default": 1
+    },
+    "questionStyle": {
+      "type": "string",
+      "title": "Question wording",
+      "description": "'default' asks whether an item still matters for what the assistant does next; 'evidence' asks whether it is needed to trust or reproduce a later claim.",
+      "default": "default"
+    },
     "model": {
       "type": "string",
       "title": "Jev model",

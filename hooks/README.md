@@ -1,5 +1,9 @@
 # fast-jev-compaction Claude Code mod
 
+This is the experimental fleet fork. Library/hook checks pass; native-session
+continuation verification is pending. Install instructions below target this
+fork's distinct marketplace, so it does not silently select the upstream version.
+
 This plugin uses Claude Code function hooks to replace a compaction with the
 original messages, minus the tool calls and tool results Jev judged no longer
 needed. `hooks/fast-jev.ts` is a thin adapter: it reads the plugin options,
@@ -31,8 +35,8 @@ hooks surface before installing or loading it:
 export CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1
 export TYPESAFE_API_KEY="<your TypeSafe key>"
 
-claude plugin marketplace add tamaratran/fast-jev-compaction
-claude plugin install fast-jev-compaction@fast-jev-compaction
+claude plugin marketplace add artyomx33/fast-jev-compaction
+claude plugin install fast-jev-compaction@fleet-jev-compaction
 ```
 
 For local development:
@@ -55,6 +59,8 @@ The plugin declares these `userConfig` values in
 | `maxStateTokens` | `25000` |
 | `maxRequestTokens` | `30000` |
 | `truncateHeadChars` | `300` |
+| `maxDropRatio` | `1` (off; use `0.8` for a guarded trial) |
+| `questionStyle` | `'default'` (use `'evidence'` for a trial) |
 | `model` | `jev-latest` |
 
 The TypeSafe key can be supplied as the sensitive `apiKey` plugin option or
@@ -65,7 +71,7 @@ Every option except `apiKey`, `compactAtPercent`, `minReductionRatio` and
 `model` is passed straight to the library; see the root README for what they
 do. The `session.compact` hook runs the Jev requests concurrently. If Jev fails,
 the response is malformed, the key is unavailable, the history cannot be
-fitted into the state budget, or the estimated reduction is below
+fitted into the state budget, the drop guard refuses the result, or the estimated reduction is below
 `minReductionRatio`, the hook logs a fallback and delegates to Claude Code's
 built-in compaction. The outcome is shown as a toast and logged with the
 reduction, per-reason counts, state size and request count; a per-call

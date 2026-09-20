@@ -1,8 +1,8 @@
 {
-  "name": "fast-jev-compaction",
+  "name": "fleet-jev-compaction",
   "owner": {
-    "name": "tamaratran",
-    "url": "https://github.com/tamaratran"
+    "name": "artyomx33",
+    "url": "https://github.com/artyomx33/fast-jev-compaction"
   },
   "plugins": [
     {

@@ -66,6 +66,7 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
     'maxStateTokens',
     'maxRequestTokens',
     'truncateHeadChars',
+    'maxDropRatio',
   ] as const) {
     const value = options[key];
     if (typeof value === 'number' && Number.isFinite(value)) numbers[key] = value;
@@ -80,6 +81,8 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
     ),
     model: optionString(options, 'model') ?? HOOK_DEFAULTS.model,
   };
+  // Only set when configured, so an untouched config resolves to the upstream defaults.
+  if (optionString(options, 'questionStyle') === 'evidence') config.questionStyle = 'evidence';
   const apiKey = optionString(options, 'apiKey');
   if (apiKey) config.apiKey = apiKey;
   const goal = optionString(options, 'goal');
@@ -268,6 +271,10 @@ export const register: Register = (on: On, options: PluginOptions) => {
         return { status: response.status, ok: response.ok, text: response.text };
       });
       for (const line of decisionLogLines(result)) $.ui.log(line);
+      if (!result.compacted) {
+        notify($, `fallback to built-in summary (max-drop guard refused: ${summarize(result)})`);
+        return next(event);
+      }
       if (reductionRatio(result) < config.minReductionRatio) {
         notify(
           $,

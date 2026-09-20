@@ -105,7 +105,18 @@ export interface CompactOptions {
   maxRequestTokens?: number;
   /** Characters of a dropped tool result to retain. Default 300. */
   truncateHeadChars?: number;
+  /** Quantity guard: refuse when more than this share of candidates would go. Default 1 (off). */
+  maxDropRatio?: number;
+  /** Wording of the two noul questions. Default 'default'. */
+  questionStyle?: QuestionStyle;
 }
+
+/**
+ * 'default' asks whether an item still matters for what the assistant does
+ * next; 'evidence' asks whether it is needed to trust or reproduce a later
+ * claim.
+ */
+export type QuestionStyle = 'default' | 'evidence';
 
 export interface ResolvedCompactOptions {
   goal: string;
@@ -114,12 +125,21 @@ export interface ResolvedCompactOptions {
   maxStateTokens: number;
   maxRequestTokens: number;
   truncateHeadChars: number;
+  maxDropRatio: number;
+  questionStyle: QuestionStyle;
 }
 
 export interface CompactResult {
   /** The compacted transcript; untouched messages are the input objects. */
   messages: Message[];
   decisions: CallDecision[];
+  /**
+   * False when the guard refused: `messages` is then the input, unchanged, and
+   * the caller must not treat it as a compaction.
+   */
+  compacted: boolean;
+  /** Set when the max-drop guard refused the compaction. */
+  guard?: 'max_drop';
   stats: {
     messagesBefore: number;
     messagesAfter: number;
