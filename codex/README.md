@@ -25,9 +25,16 @@ The command reads one hook event as JSON on stdin and writes one hook response a
 as a command argument. If `--key-file` is omitted, `TYPESAFE_API_KEY` is read from the hook
 environment. The state directory and key file should remain outside the repository.
 
-Copy the two command hooks from [hooks.example.toml](hooks.example.toml) into a reviewed Codex
-profile and replace its generic absolute paths. Codex hook trust is an installation-time runtime
-step; this repository does not mutate global configuration or install itself.
+Copy the two command hooks from [hooks.example.toml](hooks.example.toml) into
+`~/.codex/jev.config.toml` and replace its generic absolute paths. Start an explicit session with
+`codex -p jev`, then review and trust these two hooks through Codex's normal hook prompt or `/hooks`.
+The profile leaves ordinary Codex sessions unchanged. Use a pinned build path so an update is a
+deliberate change to the hook definition. The repository does not install itself.
+
+On the configured development Mac, `codex-jev` launches this profile. To disable it for the next
+session, launch plain `codex`; to uninstall, remove the named profile and its launcher. The profile
+does not apply to the `codex app-server` subcommand; the isolated integration test used a dedicated
+`CODEX_HOME` with its own hook configuration and persisted trust.
 
 ## Supported transcript records
 
