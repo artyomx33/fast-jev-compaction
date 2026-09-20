@@ -9,6 +9,7 @@ import type {
   JevAsker,
   JevQuestions,
   Message,
+  QuestionStyle,
   ResolvedCompactOptions,
   ToolCall,
   ToolUse,
@@ -22,6 +23,7 @@ export const DEFAULT_OPTIONS: ResolvedCompactOptions = {
   maxRequestTokens: 30_000,
   truncateHeadChars: 300,
   maxDropRatio: 1,
+  questionStyle: 'default',
 };
 
 /** Tokens the request envelope (`model`, key names) adds around state and questions. */
@@ -51,11 +53,25 @@ export function resolveOptions(options: CompactOptions = {}): ResolvedCompactOpt
       Math.floor(finite(options.truncateHeadChars, DEFAULT_OPTIONS.truncateHeadChars)),
     ),
     maxDropRatio: finite(options.maxDropRatio, DEFAULT_OPTIONS.maxDropRatio),
+    questionStyle:
+      options.questionStyle === 'evidence' ? 'evidence' : DEFAULT_OPTIONS.questionStyle,
   };
 }
 
 /** The two `noul` questions asked about one call: keep the call, keep its result. */
-export function questionsFor(call: ToolCall): JevQuestions {
+export function questionsFor(call: ToolCall, style: QuestionStyle = 'default'): JevQuestions {
+  if (style === 'evidence') {
+    return {
+      [`call_${call.id}`]: {
+        type: 'noul',
+        instructions: `Would a future reader of this transcript need to know that tool call ${call.id} (${call.tool}) was made, with its input, to trust or reproduce a later claim?`,
+      },
+      [`result_${call.id}`]: {
+        type: 'noul',
+        instructions: `Does the output of tool call ${call.id} (${call.tool}, ${call.resultChars} chars) contain a specific value (path, line, error, number, constraint) that later text relies on or that would be costly to re-derive?`,
+      },
+    };
+  }
   return {
     [`call_${call.id}`]: {
       type: 'noul',
@@ -75,14 +91,14 @@ export function questionsFor(call: ToolCall): JevQuestions {
 export function batchCalls(
   calls: readonly ToolCall[],
   stateTokens: number,
-  options: Pick<ResolvedCompactOptions, 'maxRequestTokens'>,
+  options: Pick<ResolvedCompactOptions, 'maxRequestTokens' | 'questionStyle'>,
 ): ToolCall[][] {
   const budget = options.maxRequestTokens - stateTokens - REQUEST_OVERHEAD_TOKENS;
   const batches: ToolCall[][] = [];
   let current: ToolCall[] = [];
   let currentTokens = 0;
   for (const call of calls) {
-    const tokens = estimateTokens(JSON.stringify(questionsFor(call)));
+    const tokens = estimateTokens(JSON.stringify(questionsFor(call, options.questionStyle)));
     if (current.length > 0 && currentTokens + tokens > budget) {
       batches.push(current);
       current = [];
@@ -120,8 +136,12 @@ async function askBatch(
   asker: JevAsker,
   state: CompactionState,
   batch: readonly ToolCall[],
+  style: QuestionStyle,
 ): Promise<Map<string, CallAnswer>> {
-  const questions: JevQuestions = Object.assign({}, ...batch.map(questionsFor));
+  const questions: JevQuestions = Object.assign(
+    {},
+    ...batch.map((call) => questionsFor(call, style)),
+  );
   const { answers } = await asker.ask(state, questions);
   return new Map(
     batch.map((call) => [
@@ -289,7 +309,7 @@ export async function compact(
     fitted = state;
     batches = batchCalls(candidates, state.tokens, resolved);
     const answered = await Promise.all(
-      batches.map((batch) => askBatch(asker, state.state, batch)),
+      batches.map((batch) => askBatch(asker, state.state, batch, resolved.questionStyle)),
     );
     for (const map of answered) for (const [id, answer] of map) answers.set(id, answer);
   }

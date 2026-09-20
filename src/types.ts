@@ -107,7 +107,16 @@ export interface CompactOptions {
   truncateHeadChars?: number;
   /** Quantity guard: refuse when more than this share of candidates would go. Default 1 (off). */
   maxDropRatio?: number;
+  /** Wording of the two noul questions. Default 'default'. */
+  questionStyle?: QuestionStyle;
 }
+
+/**
+ * 'default' asks whether an item still matters for what the assistant does
+ * next; 'evidence' asks whether it is needed to trust or reproduce a later
+ * claim.
+ */
+export type QuestionStyle = 'default' | 'evidence';
 
 export interface ResolvedCompactOptions {
   goal: string;
@@ -117,6 +126,7 @@ export interface ResolvedCompactOptions {
   maxRequestTokens: number;
   truncateHeadChars: number;
   maxDropRatio: number;
+  questionStyle: QuestionStyle;
 }
 
 export interface CompactResult {

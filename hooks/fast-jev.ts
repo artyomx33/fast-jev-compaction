@@ -81,6 +81,8 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
     ),
     model: optionString(options, 'model') ?? HOOK_DEFAULTS.model,
   };
+  // Only set when configured, so an untouched config resolves to the upstream defaults.
+  if (optionString(options, 'questionStyle') === 'evidence') config.questionStyle = 'evidence';
   const apiKey = optionString(options, 'apiKey');
   if (apiKey) config.apiKey = apiKey;
   const goal = optionString(options, 'goal');
