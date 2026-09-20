@@ -1,0 +1,18 @@
+# Merge these tables into a reviewed Codex profile and replace every generic path.
+
+[[hooks.PreCompact]]
+matcher = "^(manual|auto)$"
+
+[[hooks.PreCompact.hooks]]
+type = "command"
+command = "node /absolute/path/to/fast-jev-compaction/dist/codex/hook.js --state-dir /absolute/path/to/private/state/jev-codex --key-file /absolute/path/to/private/typesafe.env --model jev-latest"
+timeout = 30
+
+[[hooks.SessionStart]]
+matcher = "^compact$"
+
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "node /absolute/path/to/fast-jev-compaction/dist/codex/hook.js --state-dir /absolute/path/to/private/state/jev-codex --key-file /absolute/path/to/private/typesafe.env --model jev-latest"
+timeout = 30
+additionalContextLimit = 0
