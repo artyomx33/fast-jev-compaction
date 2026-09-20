@@ -21,6 +21,7 @@ export const DEFAULT_OPTIONS: ResolvedCompactOptions = {
   maxStateTokens: 25_000,
   maxRequestTokens: 30_000,
   truncateHeadChars: 300,
+  maxDropRatio: 1,
 };
 
 /** Tokens the request envelope (`model`, key names) adds around state and questions. */
@@ -49,6 +50,7 @@ export function resolveOptions(options: CompactOptions = {}): ResolvedCompactOpt
       0,
       Math.floor(finite(options.truncateHeadChars, DEFAULT_OPTIONS.truncateHeadChars)),
     ),
+    maxDropRatio: finite(options.maxDropRatio, DEFAULT_OPTIONS.maxDropRatio),
   };
 }
 
@@ -243,6 +245,20 @@ export function reductionRatio(result: Pick<CompactResult, 'stats'>): number {
   return charsBefore === 0 ? 0 : (charsBefore - charsAfter) / charsBefore;
 }
 
+/**
+ * The minimum number of candidates that must survive by decision. Below three
+ * candidates the absolute floor cannot apply — there is nothing to compact.
+ */
+export function minSurvivingCandidates(candidates: number, maxDropRatio: number): number {
+  const share = Math.ceil((1 - maxDropRatio) * candidates);
+  return candidates >= 3 ? Math.max(share, 3) : share;
+}
+
+export function guardRefuses(kept: number, candidates: number, maxDropRatio: number): boolean {
+  if (candidates === 0 || maxDropRatio >= 1) return false;
+  return kept < minSurvivingCandidates(candidates, maxDropRatio);
+}
+
 function count(decisions: readonly CallDecision[], reason: CallDecision['reason']): number {
   return decisions.filter((decision) => decision.reason === reason).length;
 }
@@ -281,14 +297,18 @@ export async function compact(
   const decisions = calls.map((call) =>
     decideCall(call, answers.get(call.id) ?? { keepCall: 1, keepResult: 1 }, resolved),
   );
-  const kept = applyDecisions(
-    messages,
-    decisions,
-    calls,
-    resolved.truncateHeadChars,
-  );
+  // Quantity guard, over candidates only: pinned calls were never at risk, so
+  // counting them as survivors would let every real candidate go. It counts
+  // kept-by-decision calls; it does not judge their content. `maxDropRatio: 1`
+  // disables it.
+  const refused = guardRefuses(count(decisions, 'kept'), candidates.length, resolved.maxDropRatio);
+  const kept = refused
+    ? [...messages]
+    : applyDecisions(messages, decisions, calls, resolved.truncateHeadChars);
   return {
     messages: kept,
+    compacted: !refused,
+    ...(refused ? { guard: 'max_drop' as const } : {}),
     decisions,
     stats: {
       messagesBefore: messages.length,

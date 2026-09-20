@@ -52,6 +52,12 @@
       "description": "Characters of a tool result kept when Jev decides its full output is no longer needed; 0 keeps only the note.",
       "default": 300
     },
+    "maxDropRatio": {
+      "type": "number",
+      "title": "Maximum drop ratio",
+      "description": "Refuse the compaction when more than this share of candidate tool calls would be removed; 1 disables the guard.",
+      "default": 1
+    },
     "model": {
       "type": "string",
       "title": "Jev model",

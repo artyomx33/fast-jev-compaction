@@ -105,6 +105,8 @@ export interface CompactOptions {
   maxRequestTokens?: number;
   /** Characters of a dropped tool result to retain. Default 300. */
   truncateHeadChars?: number;
+  /** Quantity guard: refuse when more than this share of candidates would go. Default 1 (off). */
+  maxDropRatio?: number;
 }
 
 export interface ResolvedCompactOptions {
@@ -114,12 +116,20 @@ export interface ResolvedCompactOptions {
   maxStateTokens: number;
   maxRequestTokens: number;
   truncateHeadChars: number;
+  maxDropRatio: number;
 }
 
 export interface CompactResult {
   /** The compacted transcript; untouched messages are the input objects. */
   messages: Message[];
   decisions: CallDecision[];
+  /**
+   * False when the guard refused: `messages` is then the input, unchanged, and
+   * the caller must not treat it as a compaction.
+   */
+  compacted: boolean;
+  /** Set when the max-drop guard refused the compaction. */
+  guard?: 'max_drop';
   stats: {
     messagesBefore: number;
     messagesAfter: number;
