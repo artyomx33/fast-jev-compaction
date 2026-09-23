@@ -37,14 +37,32 @@ export function estimateTokens(text: string): number {
   return Math.ceil(tokens);
 }
 
+/**
+ * `String.prototype.slice` on UTF-16 indices can cut an astral character (an
+ * emoji, for example) in half, leaving a lone surrogate. JSON carries it as a
+ * WTF-8 byte sequence and Jev rejects the whole request with 400 "Request
+ * contains invalid Unicode text". Nudge the cut outwards so pairs stay whole.
+ */
+export function sliceOnCodePoints(text: string, start: number, end?: number): string {
+  let from = Math.max(0, Math.min(start, text.length));
+  let to = end === undefined ? text.length : Math.max(from, Math.min(end, text.length));
+  if (from > 0 && from < text.length && isLowSurrogate(text.charCodeAt(from))) from -= 1;
+  if (to > 0 && to < text.length && isLowSurrogate(text.charCodeAt(to))) to -= 1;
+  return text.slice(from, to);
+}
+
+function isLowSurrogate(code: number): boolean {
+  return code >= 0xdc00 && code <= 0xdfff;
+}
+
 export function truncate(text: string, limit: number): string {
-  return text.length <= limit ? text : `${text.slice(0, Math.max(0, limit - 1))}…`;
+  return text.length <= limit ? text : `${sliceOnCodePoints(text, 0, Math.max(0, limit - 1))}…`;
 }
 
 function abridge(text: string, head: number, tail: number): string {
   if (text.length <= head + tail + 40) return text;
   const omitted = text.length - head - tail;
-  return `${text.slice(0, head)}\n[… ${omitted} chars omitted …]\n${text.slice(-tail)}`;
+  return `${sliceOnCodePoints(text, 0, head)}\n[… ${omitted} chars omitted …]\n${sliceOnCodePoints(text, text.length - tail)}`;
 }
 
 export function isPinned(
