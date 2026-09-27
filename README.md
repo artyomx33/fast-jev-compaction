@@ -62,10 +62,13 @@ built-in compaction summary with the original messages.
    the first message or in the newest `preserveRecentMessages` messages are
    pinned and never touched.
 2. The **state** sent to Jev is the whole conversation so far, oldest first,
-   with every tool result replaced by a short note (`ok, 4213 chars (omitted)`).
+   with every tool result replaced by a short note (`ok, 4213 chars (omitted)`);
+   when the budget allows, the note is `ok, 4213 chars` plus `result_head`, the
+   output's first `truncateHeadChars` characters with whitespace collapsed.
    Tool inputs are included, texts are included, nothing is summarized.
 3. The state is fitted into `maxStateTokens` (25k by default) in stages, each
-   applied only if the previous one was not enough: tool inputs truncated to
+   applied only if the previous one was not enough: result heads left out,
+   oldest non-pinned calls first; tool inputs truncated to
    1000, then 200, then 60 characters; long texts abridged to head + tail,
    oldest non-pinned messages first; old non-pinned messages collapsed to a
    `[… N chars omitted …]` note; old tool calls reduced to one line each
@@ -77,7 +80,8 @@ built-in compaction summary with the original messages.
 4. For every non-pinned call Jev gets two `noul` questions: should the **call**
    stay (knowing it was made, with its input, still matters), and should the
    **result** stay verbatim (its contents are still needed and re-running the
-   tool would not do).
+   tool would not do); the result question tells Jev whether it can judge from
+   `result_head` or that the output is not shown.
 5. Questions are split into as many requests as needed so state plus questions
    stays under `maxRequestTokens` (30k by default, under Jev's 32k request
    limit). The same full state is resent with every request; requests run
@@ -147,7 +151,7 @@ put it in a source file.
 | `preserveRecentMessages` | `6` | Newest messages never touched (the first is always kept) |
 | `maxStateTokens` | `25000` | Estimated token ceiling for the state |
 | `maxRequestTokens` | `30000` | Estimated ceiling for state plus one batch of questions |
-| `truncateHeadChars` | `300` | Characters of a dropped tool result retained before its note |
+| `truncateHeadChars` | `300` | Characters of a tool result shown to Jev as `result_head`, and retained before its note when the result is dropped |
 | `maxDropRatio` | `1` | Quantity guard: refuse the compaction when too few candidates survive (`1` disables) |
 | `questionStyle` | `'default'` | `'evidence'` asks about reproducibility instead of what happens next |
 

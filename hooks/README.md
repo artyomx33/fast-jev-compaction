@@ -11,15 +11,16 @@ finds the TypeSafe key, hands `session.compact` transcripts to the
 `fast-jev-compaction` library in `src/` (the plugin folder is the repository
 root, so the hook imports it directly) and maps the result back onto session
 messages. User and assistant text is never touched. Jev is sent the whole
-conversation as `state` (tool outputs replaced by a one-line note) and, for
+conversation as `state` (tool outputs replaced by a one-line note plus, when
+the budget allows, their first `truncateHeadChars` characters) and, for
 every tool call outside the pinned first and newest messages, two questions:
 whether the call should stay and whether its full output should stay. An
 item is kept when Jev's probability reaches `keepThreshold`; a dropped result
 is truncated to its first `truncateHeadChars` characters plus a one-line note,
 and a dropped call disappears with its result.
 
-The state is fitted into `maxStateTokens` in stages: tool inputs are
-truncated, then long texts are abridged (oldest first, pinned messages last),
+The state is fitted into `maxStateTokens` in stages: result heads are left
+out, then tool inputs are truncated, then long texts are abridged (oldest first, pinned messages last),
 then old messages collapse to a `[… N chars omitted …]` note, then old tool
 calls shrink to one line each, then old call-less messages are left out and
 runs of old call-only messages fold together. Questions are split into as many requests as

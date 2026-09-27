@@ -1,5 +1,11 @@
 import { noulAnswer } from './request.js';
-import { collectToolCalls, estimateTokens, fitState, sliceOnCodePoints } from './state.js';
+import {
+  callsWithHead,
+  collectToolCalls,
+  estimateTokens,
+  fitState,
+  sliceOnCodePoints,
+} from './state.js';
 import type {
   CallAnswer,
   CallDecision,
@@ -58,8 +64,19 @@ export function resolveOptions(options: CompactOptions = {}): ResolvedCompactOpt
   };
 }
 
-/** The two `noul` questions asked about one call: keep the call, keep its result. */
-export function questionsFor(call: ToolCall, style: QuestionStyle = 'default'): JevQuestions {
+/**
+ * The two `noul` questions asked about one call: keep the call, keep its
+ * result. `headShown` says whether the state carries the call's `result_head`,
+ * so the result question names the evidence Jev actually has.
+ */
+export function questionsFor(
+  call: ToolCall,
+  style: QuestionStyle = 'default',
+  headShown = false,
+): JevQuestions {
+  const evidence = headShown
+    ? 'Judge from its `result_head` and the later text.'
+    : '(Output not shown; judge from the call, its input and the later text.)';
   if (style === 'evidence') {
     return {
       [`call_${call.id}`]: {
@@ -68,7 +85,7 @@ export function questionsFor(call: ToolCall, style: QuestionStyle = 'default'): 
       },
       [`result_${call.id}`]: {
         type: 'noul',
-        instructions: `Does the output of tool call ${call.id} (${call.tool}, ${call.resultChars} chars) contain a specific value (path, line, error, number, constraint) that later text relies on or that would be costly to re-derive?`,
+        instructions: `Does the output of tool call ${call.id} (${call.tool}, ${call.resultChars} chars) contain a specific value (path, line, error, number, constraint) that later text relies on or that would be costly to re-derive? ${evidence}`,
       },
     };
   }
@@ -79,7 +96,7 @@ export function questionsFor(call: ToolCall, style: QuestionStyle = 'default'): 
     },
     [`result_${call.id}`]: {
       type: 'noul',
-      instructions: `The full output of tool call ${call.id} (${call.tool}, ${call.resultChars} chars) should stay in the history verbatim: the assistant still needs its contents and re-running the tool would not do`,
+      instructions: `The full output of tool call ${call.id} (${call.tool}, ${call.resultChars} chars) should stay in the history verbatim: the assistant still needs its contents and re-running the tool would not do. ${evidence}`,
     },
   };
 }
@@ -92,13 +109,16 @@ export function batchCalls(
   calls: readonly ToolCall[],
   stateTokens: number,
   options: Pick<ResolvedCompactOptions, 'maxRequestTokens' | 'questionStyle'>,
+  heads: ReadonlySet<string> = new Set(),
 ): ToolCall[][] {
   const budget = options.maxRequestTokens - stateTokens - REQUEST_OVERHEAD_TOKENS;
   const batches: ToolCall[][] = [];
   let current: ToolCall[] = [];
   let currentTokens = 0;
   for (const call of calls) {
-    const tokens = estimateTokens(JSON.stringify(questionsFor(call, options.questionStyle)));
+    const tokens = estimateTokens(
+      JSON.stringify(questionsFor(call, options.questionStyle, heads.has(call.id))),
+    );
     if (current.length > 0 && currentTokens + tokens > budget) {
       batches.push(current);
       current = [];
@@ -137,10 +157,11 @@ async function askBatch(
   state: CompactionState,
   batch: readonly ToolCall[],
   style: QuestionStyle,
+  heads: ReadonlySet<string>,
 ): Promise<Map<string, CallAnswer>> {
   const questions: JevQuestions = Object.assign(
     {},
-    ...batch.map((call) => questionsFor(call, style)),
+    ...batch.map((call) => questionsFor(call, style, heads.has(call.id))),
   );
   const { answers } = await asker.ask(state, questions);
   return new Map(
@@ -286,7 +307,8 @@ function count(decisions: readonly CallDecision[], reason: CallDecision['reason'
 /**
  * Compacts a transcript by asking Jev, for every tool call outside the pinned
  * first and newest messages, whether the call and whether its result must
- * stay. The whole history (results omitted, fitted into `maxStateTokens`) is
+ * stay. The whole history (results reduced to a note and, room permitting, a
+ * head; fitted into `maxStateTokens`) is
  * sent as state with every batch of questions. Throws when Jev fails or the
  * history cannot be fitted; the caller decides whether to fall back.
  */
@@ -307,9 +329,12 @@ export async function compact(
   if (candidates.length > 0) {
     const state = fitState(messages, calls, resolved);
     fitted = state;
-    batches = batchCalls(candidates, state.tokens, resolved);
+    const heads = callsWithHead(state.state);
+    batches = batchCalls(candidates, state.tokens, resolved, heads);
     const answered = await Promise.all(
-      batches.map((batch) => askBatch(asker, state.state, batch, resolved.questionStyle)),
+      batches.map((batch) =>
+        askBatch(asker, state.state, batch, resolved.questionStyle, heads),
+      ),
     );
     for (const map of answered) for (const [id, answer] of map) answers.set(id, answer);
   }

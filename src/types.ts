@@ -68,6 +68,8 @@ export interface HistoryToolCall {
   tool: string;
   input: string;
   result: string;
+  /** First `truncateHeadChars` characters of the output, whitespace collapsed, when the budget allows. */
+  result_head?: string;
 }
 
 export interface HistoryEntry {
@@ -78,7 +80,7 @@ export interface HistoryEntry {
   tool_calls?: HistoryToolCall[] | string[];
 }
 
-/** The state sent with every Jev request: the whole history, results omitted. */
+/** The state sent with every Jev request: the whole history, results reduced to a note and a head. */
 export interface CompactionState {
   context: string;
   goal: string;
@@ -103,7 +105,7 @@ export interface CompactOptions {
   maxStateTokens?: number;
   /** Estimated token ceiling for state plus one batch of questions. Default 30000. */
   maxRequestTokens?: number;
-  /** Characters of a dropped tool result to retain. Default 300. */
+  /** Characters of a tool result shown to Jev as `result_head` and retained when the result is dropped. Default 300. */
   truncateHeadChars?: number;
   /** Quantity guard: refuse when more than this share of candidates would go. Default 1 (off). */
   maxDropRatio?: number;
