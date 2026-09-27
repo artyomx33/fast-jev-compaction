@@ -2,6 +2,7 @@ import type {
   CompactionState,
   FittedState,
   HistoryEntry,
+  HistoryToolCall,
   Message,
   ResolvedCompactOptions,
   ToolCall,
@@ -9,7 +10,7 @@ import type {
 } from './types.js';
 
 export const STATE_CONTEXT =
-  'A coding assistant conversation is being compacted to free context. `history` is the whole conversation so far, oldest first; tool outputs are replaced by a short `result` note and long texts may be abridged. Each question asks whether one tool call, or the full output of that call, still needs to stay in the history verbatim. Whatever is not kept is deleted permanently, but the assistant can always re-run a tool or re-read a file.';
+  'A coding assistant conversation is being compacted to free context. `history` is the whole conversation so far, oldest first; tool outputs are replaced by a short `result` note, with the first characters of the output (whitespace collapsed) as `result_head` when there is room, and long texts may be abridged. Each question asks whether one tool call, or the full output of that call, still needs to stay in the history verbatim. Whatever is not kept is deleted permanently, but the assistant can always re-run a tool or re-read a file.';
 
 /** Successive caps on the serialised tool input included per call. */
 const INPUT_CHARS = [1000, 200, 60] as const;
@@ -124,6 +125,27 @@ function resultNote(call: ToolCall): string {
   return `${call.isError ? 'error' : 'ok'}, ${call.resultChars} chars (omitted)`;
 }
 
+/** The first `headChars` characters of a call's output, whitespace collapsed; '' when none. */
+function resultHead(messages: readonly Message[], call: ToolCall, headChars: number): string {
+  if (headChars <= 0) return '';
+  const text =
+    messages[call.resultIndex]?.toolResults?.find(
+      (result) => result.tool_use_id === call.tool_use_id,
+    )?.text ?? '';
+  return truncate(text.replace(/\s+/g, ' ').trim(), headChars);
+}
+
+/** Ids of the calls whose `result_head` the state carries. */
+export function callsWithHead(state: CompactionState): Set<string> {
+  const ids = new Set<string>();
+  for (const entry of state.history) {
+    for (const call of entry.tool_calls ?? []) {
+      if (typeof call !== 'string' && call.result_head !== undefined) ids.add(call.id);
+    }
+  }
+  return ids;
+}
+
 /** One call as a single line, for when the structured form is too costly. */
 function compactCall(call: ToolCall): string {
   const input = Object.entries(call.input)
@@ -170,16 +192,24 @@ function historyEntries(
   messages: readonly Message[],
   calls: readonly ToolCall[],
   inputChars: number,
+  headChars: number,
 ): HistoryEntry[] {
   const byMessage = callsByMessage(calls);
   const entries: HistoryEntry[] = [];
   messages.forEach((message, i) => {
-    const toolCalls = (byMessage.get(i) ?? []).map((call) => ({
-      id: call.id,
-      tool: call.tool,
-      input: inputText(call.input, inputChars),
-      result: resultNote(call),
-    }));
+    const toolCalls = (byMessage.get(i) ?? []).map((call): HistoryToolCall => {
+      const head = resultHead(messages, call, headChars);
+      const item: HistoryToolCall = {
+        id: call.id,
+        tool: call.tool,
+        input: inputText(call.input, inputChars),
+        result: head
+          ? `${call.isError ? 'error' : 'ok'}, ${call.resultChars} chars`
+          : resultNote(call),
+      };
+      if (head) item.result_head = head;
+      return item;
+    });
     if (message.text.trim().length === 0 && toolCalls.length === 0) return;
     const entry: HistoryEntry = { i, role: message.role, text: message.text };
     if (toolCalls.length > 0) entry.tool_calls = toolCalls;
@@ -204,7 +234,8 @@ export function goalFromMessages(messages: readonly Message[]): string {
 
 /**
  * Builds the Jev state from the whole conversation and shrinks it in stages
- * until it fits `maxStateTokens`: tool inputs are truncated, then long texts
+ * until it fits `maxStateTokens`: result heads are left out (oldest first,
+ * pinned messages last), then tool inputs are truncated, then long texts
  * are abridged oldest-first (pinned messages last), then old messages collapse
  * to a one-line note, then old tool calls shrink to one line each, then old
  * messages that carry no call are left out, then runs of old call-only
@@ -213,7 +244,10 @@ export function goalFromMessages(messages: readonly Message[]): string {
 export function fitState(
   messages: readonly Message[],
   calls: readonly ToolCall[],
-  options: Pick<ResolvedCompactOptions, 'maxStateTokens' | 'preserveRecentMessages' | 'goal'>,
+  options: Pick<
+    ResolvedCompactOptions,
+    'maxStateTokens' | 'preserveRecentMessages' | 'goal' | 'truncateHeadChars'
+  >,
 ): FittedState {
   const goal = options.goal || goalFromMessages(messages);
   const stateOf = (history: HistoryEntry[]): CompactionState => ({
@@ -232,8 +266,8 @@ export function fitState(
   let history: HistoryEntry[] = [];
   let perEntry: number[] = [];
   let tokens = 0;
-  const rebuild = (inputChars: number): void => {
-    history = historyEntries(messages, calls, inputChars);
+  const rebuild = (inputChars: number, headChars = 0): void => {
+    history = historyEntries(messages, calls, inputChars, headChars);
     perEntry = history.map(entryTokens);
     tokens = baseTokens + perEntry.reduce((sum, n) => sum + n, 0);
   };
@@ -247,13 +281,8 @@ export function fitState(
     perEntry[index] = now;
   };
 
-  rebuild(INPUT_CHARS[0]);
+  rebuild(INPUT_CHARS[0], options.truncateHeadChars);
   if (fits()) return fitted(history, tokens, 'full');
-
-  for (const limit of INPUT_CHARS.slice(1)) {
-    rebuild(limit);
-    if (fits()) return fitted(history, tokens, `inputs<=${limit}`);
-  }
 
   const pinned = (entry: HistoryEntry): boolean =>
     isPinned(entry.i, messages.length, options.preserveRecentMessages);
@@ -262,6 +291,25 @@ export function fitState(
     ...indices.filter((index) => !pinned(history[index]!)),
     ...indices.filter((index) => pinned(history[index]!)),
   ];
+
+  const byId = new Map(calls.map((call) => [call.id, call]));
+  for (const index of order) {
+    const entry = history[index]!;
+    const own = entry.tool_calls as HistoryToolCall[] | undefined;
+    if (!own?.some((call) => call.result_head !== undefined)) continue;
+    shrink(index, (e) => {
+      e.tool_calls = own.map(({ result_head: _, ...call }) => ({
+        ...call,
+        result: resultNote(byId.get(call.id)!),
+      }));
+    });
+    if (fits()) return fitted(history, tokens, 'result heads left out');
+  }
+
+  for (const limit of INPUT_CHARS.slice(1)) {
+    rebuild(limit);
+    if (fits()) return fitted(history, tokens, `inputs<=${limit}`);
+  }
 
   for (const index of order) {
     const entry = history[index]!;

@@ -1,6 +1,6 @@
 {
   "name": "fast-jev-compaction",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Verbatim Jev-guided compaction for Claude Code sessions.",
   "license": "MIT",
   "userConfig": {
@@ -49,7 +49,7 @@
     "truncateHeadChars": {
       "type": "number",
       "title": "Truncated tool result head",
-      "description": "Characters of a tool result kept when Jev decides its full output is no longer needed; 0 keeps only the note.",
+      "description": "Characters of a tool result shown to Jev as `result_head` (when the state budget allows) and kept when Jev decides its full output is no longer needed; 0 keeps only the note.",
       "default": 300
     },
     "maxDropRatio": {

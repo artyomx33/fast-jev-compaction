@@ -3,6 +3,7 @@ import {
   applyDecisions,
   batchCalls,
   buildJevRequest,
+  callsWithHead,
   collectToolCalls,
   compact,
   compactMessages,
@@ -11,8 +12,10 @@ import {
   fitState,
   JevClient,
   parseJevResponse,
+  questionsFor,
   reductionRatio,
   resolveOptions,
+  type CompactionState,
   type HistoryToolCall,
   type JevAsker,
   type JevQuestions,
@@ -69,6 +72,7 @@ const fit = {
   maxStateTokens: 25_000,
   preserveRecentMessages: 0,
   goal: 'fix the test',
+  truncateHeadChars: 0,
 };
 
 describe('options', () => {
@@ -153,10 +157,10 @@ describe('state fitting', () => {
     ];
     const { state, stage, tokens } = fitState(messages, collectToolCalls(messages, 0), {
       ...fit,
-      maxStateTokens: 300,
+      maxStateTokens: 330,
     });
     expect(stage).toBe('inputs<=200');
-    expect(tokens).toBeLessThanOrEqual(300);
+    expect(tokens).toBeLessThanOrEqual(330);
     expect(state.history[0]?.text).toBe('start');
     expect((state.history[1]?.tool_calls?.[0] as HistoryToolCall).input.length).toBeLessThanOrEqual(200);
   });
@@ -255,6 +259,91 @@ describe('question batching', () => {
   });
 });
 
+describe('result heads', () => {
+  const heads = { ...fit, truncateHeadChars: 300 };
+
+  it('shows Jev the first truncateHeadChars of each output, whitespace collapsed, when it fits', () => {
+    const messages = transcript();
+    const { state, stage } = fitState(messages, collectToolCalls(messages, 0), heads);
+    expect(stage).toBe('full');
+    const t1 = state.history[1]?.tool_calls?.[0] as HistoryToolCall;
+    expect(t1.result).toBe(`ok, ${fileA.length} chars`);
+    expect(t1.result_head).toBe(`${fileA.replace(/\s+/g, ' ').slice(0, 299)}…`);
+    expect(state.history[4]?.tool_calls?.[0]).toMatchObject({
+      id: 't3',
+      result: 'error, 34 chars',
+      result_head: 'FAIL b.test.ts: expected 2 to be 3',
+    });
+    expect([...callsWithHead(state)].sort()).toEqual(['t1', 't2', 't3']);
+  });
+
+  it('leaves heads out, oldest first, when they would exceed maxStateTokens', () => {
+    const messages = transcript();
+    const calls = collectToolCalls(messages, 0);
+    const full = fitState(messages, calls, heads);
+    const bare = fitState(messages, calls, fit);
+
+    const partial = fitState(messages, calls, { ...heads, maxStateTokens: full.tokens - 1 });
+    expect(partial.stage).toBe('result heads left out');
+    expect(partial.tokens).toBeLessThanOrEqual(full.tokens - 1);
+    expect([...callsWithHead(partial.state)].sort()).toEqual(['t2', 't3']);
+    expect((partial.state.history[1]?.tool_calls?.[0] as HistoryToolCall).result).toBe(
+      `ok, ${fileA.length} chars (omitted)`,
+    );
+
+    const none = fitState(messages, calls, { ...heads, maxStateTokens: bare.tokens });
+    expect(none.stage).toBe('result heads left out');
+    expect(callsWithHead(none.state).size).toBe(0);
+    expect(none.state).toEqual(bare.state);
+  });
+
+  it('words the result question after what the state carries', async () => {
+    const call = collectToolCalls(transcript(), 0)[0]!;
+    expect(questionsFor(call, 'default', true).result_t1.instructions).toMatch(
+      /Judge from its `result_head` and the later text\.$/,
+    );
+    expect(questionsFor(call).result_t1.instructions).toMatch(
+      /\(Output not shown; judge from the call, its input and the later text\.\)$/,
+    );
+    expect(questionsFor(call, 'evidence', true).result_t1.instructions).toMatch(/`result_head`/);
+    expect(questionsFor(call, 'evidence').result_t1.instructions).toMatch(/Output not shown/);
+
+    const messages = transcript();
+    const full = fitState(messages, collectToolCalls(messages, 1), {
+      ...heads,
+      goal: '',
+      preserveRecentMessages: 1,
+    });
+    for (const maxStateTokens of [25_000, full.tokens - 1]) {
+      const asked: { state: CompactionState; questions: JevQuestions }[] = [];
+      await compact(
+        messages,
+        {
+          async ask(state, questions) {
+            asked.push({ state: state as CompactionState, questions });
+            return {
+              answers: Object.fromEntries(
+                Object.keys(questions).map((key) => [key, { type: 'noul' as const, noul: 0.9 }]),
+              ),
+            };
+          },
+        },
+        { preserveRecentMessages: 1, maxStateTokens },
+      );
+      expect(asked.length).toBeGreaterThan(0);
+      for (const { state, questions } of asked) {
+        const shown = callsWithHead(state);
+        for (const id of ['t1', 't2', 't3']) {
+          const text = questions[`result_${id}`]!.instructions;
+          expect(text.includes('`result_head`')).toBe(shown.has(id));
+          expect(text.includes('Output not shown')).toBe(!shown.has(id));
+        }
+      }
+      if (maxStateTokens !== 25_000) expect(callsWithHead(asked[0]!.state).has('t1')).toBe(false);
+    }
+  });
+});
+
 describe('decisions', () => {
   const options = { keepThreshold: 0.5 };
   const unpinned = { id: 't1', tool: 'Read', pinned: false };
@@ -340,11 +429,12 @@ describe('compact', () => {
       ...fit,
       goal: '',
       preserveRecentMessages: 1,
+      truncateHeadChars: 300,
     }).tokens;
     const output = await compact(
       messages,
       fakeJev((name) => (name.startsWith('call_') ? 0.9 : 0.1), seen),
-      { preserveRecentMessages: 1, maxRequestTokens: stateTokens + 150 },
+      { preserveRecentMessages: 1, maxRequestTokens: stateTokens + 200 },
     );
 
     expect(output.stats.requests).toBe(seen.length);
