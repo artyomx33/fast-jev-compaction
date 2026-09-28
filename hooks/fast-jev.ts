@@ -47,6 +47,42 @@ export type HookConfig = CompactOptions & {
   model: string;
 };
 
+/** Jev normally answers a compaction batch in under 3 s; a stalled origin hangs for 18 s+. */
+export const FAIL_FAST = { timeoutMs: 8_000, retries: 1 };
+
+/** Resolves after `ms`: `$.clock.sleep` in the engine, a timer in tests. */
+export type Sleep = (ms: number) => Promise<void>;
+
+/**
+ * Wraps a fetch so one Jev request cannot outlast `timeoutMs`: a timeout or a
+ * 5xx is retried `retries` times, then the last failure is thrown and the hook
+ * falls back to the built-in summary. The engine's `HttpInit` has no signal,
+ * so an abandoned request is simply left to finish on its own.
+ */
+export function failFast(
+  fetchFn: HookFetch,
+  sleep: Sleep,
+  options: { timeoutMs: number; retries: number } = FAIL_FAST,
+): HookFetch {
+  return async (url, init) => {
+    let lastError = new Error('unreachable');
+    for (let attempt = 0; attempt <= options.retries; attempt++) {
+      const timeout = sleep(options.timeoutMs).then(() => {
+        throw new Error(`Jev request timed out after ${options.timeoutMs} ms`);
+      });
+      try {
+        const response = await Promise.race([fetchFn(url, init), timeout]);
+        if (response.status < 500) return response;
+        lastError = new Error(`Jev request failed (${response.status}): ${response.text.slice(0, 200)}`);
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+      }
+      timeout.catch(() => undefined);
+    }
+    throw new Error(`${lastError.message} (after ${options.retries + 1} attempts)`);
+  };
+}
+
 function optionNumber(options: PluginOptions, key: string, fallback: number): number {
   const value = options[key];
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
@@ -266,10 +302,17 @@ export const register: Register = (on: On, options: PluginOptions) => {
   on('session.compact', async ($, event, next) => {
     try {
       const config = { ...configured, apiKey: await getApiKey($, configured) };
-      const { result, messages } = await compactSession(event.messages, config, async (url, init) => {
-        const response = await $.http.fetch(url, init);
-        return { status: response.status, ok: response.ok, text: response.text };
-      });
+      const { result, messages } = await compactSession(
+        event.messages,
+        config,
+        failFast(
+          async (url, init) => {
+            const response = await $.http.fetch(url, init);
+            return { status: response.status, ok: response.ok, text: response.text };
+          },
+          (ms) => $.clock.sleep(ms, { signal: next.signal }),
+        ),
+      );
       for (const line of decisionLogLines(result)) $.ui.log(line);
       if (!result.compacted) {
         notify($, `fallback to built-in summary (max-drop guard refused: ${summarize(result)})`);

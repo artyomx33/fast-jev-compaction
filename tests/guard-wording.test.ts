@@ -223,12 +223,15 @@ describe('hook wiring', () => {
     const logs: string[] = [];
     const $ = {
       http: { fetch: async (url: string, init?: { body?: string }) => jevFetch(0.05)(url, init) },
+      clock: { sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)) },
       ui: { log: (t: string) => logs.push(t), toast: (t: string) => logs.push(t) },
       env: { get: async () => undefined },
       settings: { read: async () => ({}) },
     };
     const event = { messages: transcript() };
-    const next = (passed: unknown) => ({ nextCalledWith: passed });
+    const next = Object.assign((passed: unknown) => ({ nextCalledWith: passed }), {
+      signal: new AbortController().signal,
+    });
 
     const outcome = await handlers['session.compact']($, event, next as never);
 

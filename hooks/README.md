@@ -70,7 +70,9 @@ development setup.
 
 Every option except `apiKey`, `compactAtPercent`, `minReductionRatio` and
 `model` is passed straight to the library; see the root README for what they
-do. The `session.compact` hook runs the Jev requests concurrently. If Jev fails,
+do. The `session.compact` hook runs the Jev requests concurrently, each limited
+to 8 s with one retry on a timeout or 5xx (`FAIL_FAST` in `hooks/fast-jev.ts`),
+so a stalled TypeSafe origin costs at most 16 s before the fallback. If Jev fails,
 the response is malformed, the key is unavailable, the history cannot be
 fitted into the state budget, the drop guard refuses the result, or the estimated reduction is below
 `minReductionRatio`, the hook logs a fallback and delegates to Claude Code's
