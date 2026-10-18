@@ -21,7 +21,7 @@ import {
   type ToolCall,
 } from '../src/index.js';
 import {
-  appendLedgerFs,
+  appendedLedger,
   compactionNotice,
   NOTICE_PREFIX,
   register,
@@ -229,16 +229,12 @@ describe('ledger', () => {
     expect(after.trim().split('\n').map((l) => JSON.parse(l).key)).toHaveLength(4);
   });
 
-  it('writes the same way through the engine fs', async () => {
-    const files = new Map<string, string>([['/l/s.jsonl', '{"key":"old"}']]);
-    const engineFs = {
-      exists: async (p: string) => files.has(p),
-      read: async (p: string) => files.get(p)!,
-      write: async (p: string, t: string) => void files.set(p, t),
-    };
+  it('builds the same append for the engine fs, which has no append', () => {
     const entry = { key: 'new', ts: 't', session: 's', tool_use_id: 'u', tool: 'Bash', input: {}, result: 'r', isError: false };
-    expect(await appendLedgerFs(engineFs, '/l/s.jsonl', [entry, { ...entry, key: 'old' }])).toBe(1);
-    expect(files.get('/l/s.jsonl')!.split('\n')).toEqual(['{"key":"old"}', JSON.stringify(entry), '']);
+    const out = appendedLedger('{"key":"old"}', [entry, { ...entry, key: 'old' }]);
+    expect(out.added).toBe(1);
+    expect(out.text.split('\n')).toEqual(['{"key":"old"}', JSON.stringify(entry), '']);
+    expect(appendedLedger(out.text, [entry])).toEqual({ text: out.text, added: 0 });
   });
 });
 

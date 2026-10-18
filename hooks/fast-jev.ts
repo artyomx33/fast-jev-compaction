@@ -319,37 +319,30 @@ export function withNotice(messages: readonly SessionMessage[], notice: string):
   ];
 }
 
-/** The `$.fs` subset the ledger writer needs, so it can be driven without an engine. */
-export type LedgerFs = {
-  exists: (path: string) => Promise<boolean>;
-  read: (path: string) => Promise<string>;
-  write: (path: string, text: string) => Promise<void>;
-};
-
 /**
- * Appends the entries whose key the ledger file does not hold yet. `$.fs`
- * has no append, so the file is read and written whole; existing lines are
- * never changed or removed. Returns how many lines were added.
+ * The ledger file's new text: `existing` with the lines of the entries whose
+ * key it does not hold yet appended (`$.fs` has no append, so the file is read
+ * and written whole). Existing lines are never changed or removed.
  */
-export async function appendLedgerFs(
-  fs: LedgerFs,
-  path: string,
+export function appendedLedger(
+  existing: string,
   entries: readonly LedgerEntry[],
-): Promise<number> {
-  if (entries.length === 0) return 0;
-  const existing = (await fs.exists(path)) ? await fs.read(path) : '';
+): { text: string; added: number } {
   const lines = newLedgerLines(entries, ledgerKeys(existing));
-  if (!lines) return 0;
+  if (!lines) return { text: existing, added: 0 };
   const joint = existing.length > 0 && !existing.endsWith('\n') ? '\n' : '';
-  await fs.write(path, `${existing}${joint}${lines}`);
-  return lines.split('\n').length - 1;
+  return { text: `${existing}${joint}${lines}`, added: lines.split('\n').length - 1 };
 }
 
 /** Writes the ledger and returns the notice's ledger wording (the path, or why there is none). */
 async function writeLedger(
   $: {
     env: { get: (name: string) => Promise<string | undefined> };
-    fs: LedgerFs;
+    fs: {
+      exists: (path: string) => Promise<boolean>;
+      read: (path: string) => Promise<string>;
+      write: (path: string, text: string) => Promise<void>;
+    };
     ui: { log: (text: string) => void };
   },
   config: HookConfig,
@@ -364,7 +357,9 @@ async function writeLedger(
   }
   const path = `${dir}/${sessionId}.jsonl`;
   try {
-    const added = await appendLedgerFs($.fs, path, entries);
+    const existing = (await $.fs.exists(path)) ? await $.fs.read(path) : '';
+    const { text, added } = appendedLedger(existing, entries);
+    if (added > 0) await $.fs.write(path, text);
     $.ui.log(`ledger: ${added} new of ${entries.length} entries in ${path}`);
     return path;
   } catch (error) {
