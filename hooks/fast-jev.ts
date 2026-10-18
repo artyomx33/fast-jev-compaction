@@ -28,8 +28,9 @@ const HOOK_DEFAULTS = {
   // The idle-compaction protection: Claude Code compacts an idle session
   // before its prompt cache expires, often right after the person's last
   // instructions; their recent turns stay verbatim.
-  preserveRecentHumanTurns: 10,
+  preserveRecentHumanTurns: 3,
   stubMode: 'digest' as const,
+  onNothingToDrop: 'skip' as const,
 };
 
 /** Relative to the home directory, unless the `ledgerDir` option names one. */
@@ -57,6 +58,12 @@ export type HookConfig = CompactOptions & {
   model: string;
   /** Absolute ledger directory; unset, `$HOME/` + `LEDGER_SUBDIR`. */
   ledgerDir?: string;
+  /**
+   * When the recent-human-turn window leaves nothing (or too little) to drop:
+   * 'skip' leaves the conversation as it is (`{ skip }`), 'native' hands it to
+   * the built-in summary, as below `minReductionRatio` otherwise.
+   */
+  onNothingToDrop: 'skip' | 'native';
 };
 
 /** Jev normally answers a compaction batch in under 3 s; a stalled origin hangs for 18 s+. */
@@ -121,6 +128,7 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
     if (typeof value === 'number' && Number.isFinite(value)) numbers[key] = value;
   }
   const stubMode = optionString(options, 'stubMode');
+  const onNothingToDrop = optionString(options, 'onNothingToDrop');
   const config: HookConfig = {
     preserveRecentHumanTurns: HOOK_DEFAULTS.preserveRecentHumanTurns,
     ...numbers,
@@ -128,6 +136,7 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
       stubMode === 'none' || stubMode === 'line' || stubMode === 'digest'
         ? stubMode
         : HOOK_DEFAULTS.stubMode,
+    onNothingToDrop: onNothingToDrop === 'native' ? 'native' : HOOK_DEFAULTS.onNothingToDrop,
     compactAtPercent: optionNumber(options, 'compactAtPercent', HOOK_DEFAULTS.compactAtPercent),
     minReductionRatio: optionNumber(
       options,
@@ -286,6 +295,25 @@ export function decisionLogLines(
   );
 }
 
+/**
+ * True when the recent-human-turn window is why the compaction cannot reach
+ * `minReductionRatio`: no candidate is left, or the window pinned more than
+ * `preserveRecentMessages` alone would and the reduction stays below it.
+ */
+export function nothingToDrop(result: CompactResult, config: HookConfig): boolean {
+  const { stats } = result;
+  if (stats.humanTurnsPinned === 0) return false;
+  if (stats.calls - stats.pinned === 0) return true;
+  const widened =
+    stats.pinnedFromIndex < stats.messagesBefore - resolveOptions(config).preserveRecentMessages;
+  return widened && reductionRatio(result) < config.minReductionRatio;
+}
+
+/** The one line a skipped compaction shows. */
+export function skipNotice(ts: string, humanTurns: number): string {
+  return `Compaction skipped by Jev at ${ts}: ${humanTurns} recent human turns pinned, nothing older to drop.`;
+}
+
 /** First words of the post-compaction notice; earlier notices are replaced, not stacked. */
 export const NOTICE_PREFIX = '<system-reminder>Compacted by Jev at ';
 
@@ -430,6 +458,11 @@ export const register: Register = (on: On, options: PluginOptions) => {
       if (!result.compacted) {
         notify($, `fallback to built-in summary (max-drop guard refused: ${summarize(result)})`);
         return next(event);
+      }
+      if (config.onNothingToDrop === 'skip' && nothingToDrop(result, config)) {
+        const skip = skipNotice(ts, result.stats.humanTurnsPinned);
+        notify($, `${skip} (${summarize(result)})`);
+        return { skip };
       }
       if (reductionRatio(result) < config.minReductionRatio) {
         notify(

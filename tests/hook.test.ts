@@ -57,8 +57,9 @@ describe('hook config', () => {
       compactAtPercent: 60,
       minReductionRatio: 0.25,
       model: 'jev-latest',
-      preserveRecentHumanTurns: 10,
+      preserveRecentHumanTurns: 3,
       stubMode: 'digest',
+      onNothingToDrop: 'skip',
     });
     expect(
       resolveHookConfig({ apiKey: 'k', keepThreshold: 0.3, maxStateTokens: 1000, model: 'jev-x', goal: 'g', compactAtPercent: 'no' }),
@@ -70,8 +71,9 @@ describe('hook config', () => {
       goal: 'g',
       compactAtPercent: 60,
       minReductionRatio: 0.25,
-      preserveRecentHumanTurns: 10,
+      preserveRecentHumanTurns: 3,
       stubMode: 'digest',
+      onNothingToDrop: 'skip',
     });
   });
 });
