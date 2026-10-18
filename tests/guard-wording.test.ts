@@ -195,7 +195,7 @@ describe('questionStyle', () => {
 
 describe('hook wiring', () => {
   it('passes questionStyle and maxDropRatio from userConfig to the library', async () => {
-    const config = resolveHookConfig({ questionStyle: 'evidence', maxDropRatio: 0.8 });
+    const config = resolveHookConfig({ questionStyle: 'evidence', maxDropRatio: 0.8, preserveRecentHumanTurns: 0 });
     expect(config.questionStyle).toBe('evidence');
     expect(config.maxDropRatio).toBe(0.8);
 
@@ -218,12 +218,16 @@ describe('hook wiring', () => {
     const on = (event: string, handler: Function) => {
       handlers[event] = handler;
     };
-    register(on as never, { apiKey: 'k', maxDropRatio: 0.8, minReductionRatio: 0, preserveRecentMessages: 1 } as never);
+    register(on as never, { apiKey: 'k', maxDropRatio: 0.8, minReductionRatio: 0, preserveRecentMessages: 1, preserveRecentHumanTurns: 0 } as never);
 
     const logs: string[] = [];
     const $ = {
       http: { fetch: async (url: string, init?: { body?: string }) => jevFetch(0.05)(url, init) },
-      clock: { sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)) },
+      clock: {
+        sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+        now: async () => Date.parse('2026-10-18T07:00:00Z'),
+      },
+      session: { id: async () => 'session-1' },
       ui: { log: (t: string) => logs.push(t), toast: (t: string) => logs.push(t) },
       env: { get: async () => undefined },
       settings: { read: async () => ({}) },
@@ -245,7 +249,7 @@ describe('hook wiring', () => {
     const messages = transcript();
     const { result: output, messages: session } = await compactSession(
       messages,
-      { ...resolveHookConfig({ maxDropRatio: 0.8, minReductionRatio: 0 }), apiKey: 'k', preserveRecentMessages: 1 },
+      { ...resolveHookConfig({ maxDropRatio: 0.8, minReductionRatio: 0, preserveRecentHumanTurns: 0 }), apiKey: 'k', preserveRecentMessages: 1 },
       jevFetch(0.05),
     );
     expect(output.compacted).toBe(false);
