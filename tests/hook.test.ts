@@ -57,7 +57,7 @@ describe('hook config', () => {
       compactAtPercent: 60,
       minReductionRatio: 0.25,
       model: 'jev-latest',
-      preserveRecentHumanTurns: 10,
+      preserveRecentHumanTurns: 3,
       stubMode: 'digest',
       onNothingToDrop: 'skip',
     });
@@ -71,7 +71,7 @@ describe('hook config', () => {
       goal: 'g',
       compactAtPercent: 60,
       minReductionRatio: 0.25,
-      preserveRecentHumanTurns: 10,
+      preserveRecentHumanTurns: 3,
       stubMode: 'digest',
       onNothingToDrop: 'skip',
     });

@@ -28,7 +28,7 @@ const HOOK_DEFAULTS = {
   // The idle-compaction protection: Claude Code compacts an idle session
   // before its prompt cache expires, often right after the person's last
   // instructions; their recent turns stay verbatim.
-  preserveRecentHumanTurns: 10,
+  preserveRecentHumanTurns: 3,
   stubMode: 'digest' as const,
   onNothingToDrop: 'skip' as const,
 };

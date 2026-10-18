@@ -115,7 +115,7 @@ export interface CompactOptions {
    * Also pin everything from the N-th most recent human turn (a user message
    * with text and no tool_result) to the end: assistant texts, tool calls and
    * their results stay verbatim. Combined with `preserveRecentMessages`; the
-   * wider window wins. Default 0 (off); the Claude Code hook defaults to 10.
+   * wider window wins. Default 0 (off); the Claude Code hook defaults to 3.
    */
   preserveRecentHumanTurns?: number;
   /**

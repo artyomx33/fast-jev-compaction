@@ -26,7 +26,7 @@
       "type": "number",
       "title": "Recent human turns to preserve",
       "description": "Everything from the N-th most recent human message to the end stays verbatim (the idle-compaction protection); 0 turns it off.",
-      "default": 10
+      "default": 3
     },
     "stubMode": {
       "type": "string",

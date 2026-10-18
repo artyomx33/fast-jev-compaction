@@ -63,7 +63,7 @@ The plugin declares these `userConfig` values in
 | `maxDropRatio` | `1` (off; use `0.8` for a guarded trial) |
 | `questionStyle` | `'default'` (use `'evidence'` for a trial) |
 | `stubMode` | `'digest'` |
-| `preserveRecentHumanTurns` | `10` |
+| `preserveRecentHumanTurns` | `3` |
 | `onNothingToDrop` | `'skip'` (`'native'`: built-in summary) |
 | `ledgerDir` | unset: `$HOME/.claude/state/compaction-ledger` |
 | `model` | `jev-latest` |

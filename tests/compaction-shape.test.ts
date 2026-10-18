@@ -406,7 +406,7 @@ describe('onNothingToDrop', () => {
   });
 
   it('leaves the conversation as it is when the window pins every call, with no native fallback', async () => {
-    // two human turns in the transcript, the default window of 10 pins everything
+    // two human turns in the transcript, the default window of 3 pins everything
     const { out, nativeCalls, files, logs, jevCalls } = await run({});
     expect(nativeCalls).toBe(0);
     expect(jevCalls()).toBe(0);

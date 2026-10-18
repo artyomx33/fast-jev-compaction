@@ -155,7 +155,7 @@ put it in a source file.
 | `maxDropRatio` | `1` | Quantity guard: refuse the compaction when too few candidates survive (`1` disables) |
 | `questionStyle` | `'default'` | `'evidence'` asks about reproducibility instead of what happens next |
 | `stubMode` | `'digest'` | What a dropped call or result leaves: `'digest'`, `'line'` or `'none'`; see below |
-| `preserveRecentHumanTurns` | `0` (hook: `10`) | Pin everything from the N-th most recent human turn to the end |
+| `preserveRecentHumanTurns` | `0` (hook: `3`) | Pin everything from the N-th most recent human turn to the end |
 | `sessionId` | `''` | Session id the ledger keys are derived from; `compactMessages` writes the ledger only with one |
 | `ledgerDir` | `~/.claude/state/compaction-ledger` | `compactMessages` and plugin option: where `<sessionId>.jsonl` ledgers go |
 
@@ -238,7 +238,7 @@ system reminders and local-command output do not count. With fewer than N
 human turns the window starts at the oldest one. The wider of this window and
 `preserveRecentMessages` wins. It only widens candidate selection; the state Jev
 sees is fitted as before. The library default is 0; the Claude Code hook
-defaults to 10. A window that holds every tool call leaves nothing to compact;
+defaults to 3 (owner pick 2026-10-18; 10 left nothing to drop at any measured point). A window that holds every tool call leaves nothing to compact;
 with `onNothingToDrop: 'skip'` (default, 0.4.1) the hook then answers `{ skip }`,
 so the conversation stays as it is and one line reads "Compaction skipped by Jev
 at <ts>: <N> recent human turns pinned, nothing older to drop." The same holds when
