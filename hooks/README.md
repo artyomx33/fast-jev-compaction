@@ -64,6 +64,7 @@ The plugin declares these `userConfig` values in
 | `questionStyle` | `'default'` (use `'evidence'` for a trial) |
 | `stubMode` | `'digest'` |
 | `preserveRecentHumanTurns` | `10` |
+| `onNothingToDrop` | `'skip'` (`'native'`: built-in summary) |
 | `ledgerDir` | unset: `$HOME/.claude/state/compaction-ledger` |
 | `model` | `jev-latest` |
 

@@ -1,6 +1,6 @@
 {
   "name": "fast-jev-compaction",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Verbatim Jev-guided compaction for Claude Code sessions.",
   "license": "MIT",
   "userConfig": {
@@ -33,6 +33,12 @@
       "title": "What a dropped call leaves",
       "description": "'digest' (1-3 lines plus a ledger key), 'line' (a one-line stub) or 'none' (silent, upstream behaviour). Full outputs go to the per-session ledger unless 'none'.",
       "default": "digest"
+    },
+    "onNothingToDrop": {
+      "type": "string",
+      "title": "When the recent turns pin everything",
+      "description": "'skip' (default) leaves the conversation as it is when the recent-human-turn window leaves nothing or too little to drop; 'native' hands it to Claude Code's built-in summary.",
+      "default": "skip"
     },
     "ledgerDir": {
       "type": "string",

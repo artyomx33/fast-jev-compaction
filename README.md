@@ -238,9 +238,12 @@ system reminders and local-command output do not count. With fewer than N
 human turns the window starts at the oldest one. The wider of this window and
 `preserveRecentMessages` wins. It only widens candidate selection; the state Jev
 sees is fitted as before. The library default is 0; the Claude Code hook
-defaults to 10. Note: a window that holds every tool call leaves nothing to
-compact, so the hook's `minReductionRatio` check hands the compaction to Claude
-Code's built-in summary.
+defaults to 10. A window that holds every tool call leaves nothing to compact;
+with `onNothingToDrop: 'skip'` (default, 0.4.1) the hook then answers `{ skip }`,
+so the conversation stays as it is and one line reads "Compaction skipped by Jev
+at <ts>: <N> recent human turns pinned, nothing older to drop." The same holds when
+the window widened the pinned tail and the reduction stays below
+`minReductionRatio`. `'native'` hands those cases to Claude Code's built-in summary.
 
 **Post-compaction notice.** When its compaction stands, the hook ends the
 history with one user message (an earlier one is replaced, not stacked):

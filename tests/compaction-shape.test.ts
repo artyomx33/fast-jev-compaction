@@ -25,6 +25,8 @@ import {
   compactionNotice,
   NOTICE_PREFIX,
   register,
+  resolveHookConfig,
+  skipNotice,
   withNotice,
 } from '../hooks/fast-jev.ts';
 
@@ -348,5 +350,89 @@ describe('post-compaction notice', () => {
       compactionNotice({ ts: '2026-10-18T07:00:00.000Z', results: 3, humanTurns: 1, ledgerPath: ledgerFile }),
     );
     expect(out.messages.map((m: Message) => m.text).join('\n')).toMatch(/agent:a6779c2b76fe06ebb/);
+  });
+});
+
+describe('onNothingToDrop', () => {
+  function engine(answer = 0.05) {
+    const files = new Map<string, string>();
+    const logs: string[] = [];
+    let jevCalls = 0;
+    const $ = {
+      http: {
+        fetch: async (_url: string, init?: { body?: string }) => {
+          jevCalls += 1;
+          const { questions } = JSON.parse(init?.body ?? '{}') as { questions: Record<string, unknown> };
+          const answers = Object.fromEntries(Object.keys(questions).map((k) => [k, { noul: answer }]));
+          return { status: 200, ok: true, text: JSON.stringify({ answers }) };
+        },
+      },
+      clock: { sleep: () => new Promise<void>(() => undefined), now: async () => Date.parse('2026-10-18T07:00:00Z') },
+      session: { id: async () => 'sess-9' },
+      fs: {
+        exists: async (p: string) => files.has(p),
+        read: async (p: string) => files.get(p)!,
+        write: async (p: string, t: string) => void files.set(p, t),
+      },
+      ui: { log: (t: string) => logs.push(t), toast: () => undefined },
+      env: { get: async (name: string) => (name === 'HOME' ? '/home/me' : undefined) },
+      settings: { read: async () => ({}) },
+    };
+    return { $, files, logs, jevCalls: () => jevCalls };
+  }
+
+  async function run(options: Record<string, unknown>) {
+    const handlers: Record<string, Function> = {};
+    register(((event: string, handler: Function) => {
+      handlers[event] = handler;
+    }) as never, { apiKey: 'k', preserveRecentMessages: 1, ...options } as never);
+    const e = engine();
+    let nativeCalls = 0;
+    const next = Object.assign(
+      () => {
+        nativeCalls += 1;
+        return { native: true };
+      },
+      { signal: new AbortController().signal },
+    );
+    const out = await handlers['session.compact'](e.$, { messages: transcript() }, next as never);
+    return { out, nativeCalls, ...e };
+  }
+
+  it('defaults to skip and reads native from userConfig', () => {
+    expect(resolveHookConfig({}).onNothingToDrop).toBe('skip');
+    expect(resolveHookConfig({ onNothingToDrop: 'native' }).onNothingToDrop).toBe('native');
+    expect(resolveHookConfig({ onNothingToDrop: 'other' }).onNothingToDrop).toBe('skip');
+  });
+
+  it('leaves the conversation as it is when the window pins every call, with no native fallback', async () => {
+    // two human turns in the transcript, the default window of 10 pins everything
+    const { out, nativeCalls, files, logs, jevCalls } = await run({});
+    expect(nativeCalls).toBe(0);
+    expect(jevCalls()).toBe(0);
+    expect(out).toEqual({ skip: skipNotice('2026-10-18T07:00:00.000Z', 2) });
+    expect(out.skip).toBe('Compaction skipped by Jev at 2026-10-18T07:00:00.000Z: 2 recent human turns pinned, nothing older to drop.');
+    expect(files.size).toBe(0);
+    expect(logs.some((l) => l.startsWith('Compaction skipped by Jev at '))).toBe(true);
+  });
+
+  it("hands it to the built-in summary with onNothingToDrop 'native'", async () => {
+    const { out, nativeCalls } = await run({ onNothingToDrop: 'native' });
+    expect(nativeCalls).toBe(1);
+    expect(out).toEqual({ native: true });
+  });
+
+  it('compacts as before when the window leaves enough to drop', async () => {
+    const { out, nativeCalls, files } = await run({ preserveRecentHumanTurns: 1, minReductionRatio: 0 });
+    expect(nativeCalls).toBe(0);
+    expect(out.skip).toBeUndefined();
+    expect(out.messages.at(-1).text.startsWith(NOTICE_PREFIX)).toBe(true);
+    expect(files.size).toBe(1);
+  });
+
+  it('still falls back to native below minReductionRatio when the window is not the reason', async () => {
+    const { out, nativeCalls } = await run({ preserveRecentHumanTurns: 0, minReductionRatio: 0.99 });
+    expect(nativeCalls).toBe(1);
+    expect(out).toEqual({ native: true });
   });
 });
