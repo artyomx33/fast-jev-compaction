@@ -1,3 +1,11 @@
+import {
+  digestText,
+  ledgerEntry,
+  ledgerKey,
+  recentHumanTurns,
+  resultTextOf,
+  stubLine,
+} from './digest.js';
 import { noulAnswer } from './request.js';
 import {
   callsWithHead,
@@ -14,9 +22,11 @@ import type {
   CompactionState,
   JevAsker,
   JevQuestions,
+  LedgerEntry,
   Message,
   QuestionStyle,
   ResolvedCompactOptions,
+  StubMode,
   ToolCall,
   ToolUse,
 } from './types.js';
@@ -30,6 +40,10 @@ export const DEFAULT_OPTIONS: ResolvedCompactOptions = {
   truncateHeadChars: 300,
   maxDropRatio: 1,
   questionStyle: 'default',
+  preserveRecentHumanTurns: 0,
+  stubMode: 'digest',
+  sessionId: '',
+  ledgerTs: '',
 };
 
 /** Tokens the request envelope (`model`, key names) adds around state and questions. */
@@ -61,6 +75,18 @@ export function resolveOptions(options: CompactOptions = {}): ResolvedCompactOpt
     maxDropRatio: finite(options.maxDropRatio, DEFAULT_OPTIONS.maxDropRatio),
     questionStyle:
       options.questionStyle === 'evidence' ? 'evidence' : DEFAULT_OPTIONS.questionStyle,
+    preserveRecentHumanTurns: Math.max(
+      0,
+      Math.floor(
+        finite(options.preserveRecentHumanTurns, DEFAULT_OPTIONS.preserveRecentHumanTurns),
+      ),
+    ),
+    stubMode:
+      options.stubMode === 'none' || options.stubMode === 'line'
+        ? options.stubMode
+        : DEFAULT_OPTIONS.stubMode,
+    sessionId: options.sessionId ?? DEFAULT_OPTIONS.sessionId,
+    ledgerTs: options.ledgerTs ?? DEFAULT_OPTIONS.ledgerTs,
   };
 }
 
@@ -175,50 +201,108 @@ async function askBatch(
   );
 }
 
+/** Results up to this many characters past the head are short enough to keep whole. */
+function fitsWhole(text: string, headChars: number): boolean {
+  return text.length <= headChars + 120;
+}
+
 function truncatedResultText(text: string, isError: boolean, headChars: number): string {
-  if (text.length <= headChars + 120) return text;
+  if (fitsWhole(text, headChars)) return text;
   const head = headChars > 0 ? `${sliceOnCodePoints(text, 0, headChars)}\n` : '';
   return `${head}[fast-jev-compaction truncated ${text.length - headChars} chars of this tool result${
     isError ? ' (error)' : ''
   }; re-run the tool if needed]`;
 }
 
+/** How `applyDecisions` marks what it removed; see `CompactOptions.stubMode`. */
+export interface StubOptions {
+  stubMode: StubMode;
+  sessionId?: string;
+  ledgerTs?: string;
+}
+
+/** What `applyDecisions` built, beyond the messages. */
+export interface Applied {
+  messages: Message[];
+  ledger: LedgerEntry[];
+  stubs: number;
+  digests: number;
+}
+
 /**
- * Rebuilds the conversation from the decisions. A dropped call disappears
- * together with its result; a dropped result keeps a bounded head and note.
+ * Rebuilds the conversation from the decisions. With `stubMode` 'none' a
+ * dropped call disappears together with its result and a dropped result
+ * keeps a bounded head and note. With 'line' or 'digest' a dropped call
+ * leaves a stub or digest line in the text of the assistant message that
+ * held it; in 'digest' mode a dropped result is replaced by its digest. Every
+ * output no longer held verbatim gets a ledger entry, keyed in its stub.
  * Messages that lose all their content are removed; untouched messages are
  * returned as the same objects they came in as.
  */
-export function applyDecisions(
+export function applyDecisionsWithLedger(
   messages: readonly Message[],
   decisions: readonly CallDecision[],
   calls: readonly ToolCall[],
   headChars: number,
-): Message[] {
+  stub: StubOptions = { stubMode: 'none' },
+): Applied {
   const byId = new Map(calls.map((call) => [call.id, call]));
   const actions = new Map<string, CallDecision['action']>();
   for (const decision of decisions) {
     const call = byId.get(decision.id);
     if (call && decision.action !== 'keep') actions.set(call.tool_use_id, decision.action);
   }
+
+  const ledger: LedgerEntry[] = [];
+  const stubsAt = new Map<number, string[]>();
+  const digestOf = new Map<string, string>();
+  let stubs = 0;
+  if (stub.stubMode !== 'none') {
+    const session = stub.sessionId ?? '';
+    const ts = stub.ledgerTs || new Date().toISOString();
+    for (const call of calls) {
+      const action = actions.get(call.tool_use_id);
+      if (!action) continue;
+      const text = resultTextOf(messages, call);
+      if (action === 'drop_result' && fitsWhole(text, headChars)) continue;
+      const key = ledgerKey(session, call.tool_use_id);
+      ledger.push(ledgerEntry(call, text, key, session, ts));
+      if (action === 'drop_result') {
+        // 'line' keeps the truncated head, its note gains the key
+        digestOf.set(
+          call.tool_use_id,
+          stub.stubMode === 'digest'
+            ? digestText(call, text, key)
+            : `${truncatedResultText(text, call.isError, headChars)} ledger:${key}`,
+        );
+        continue;
+      }
+      const line =
+        stub.stubMode === 'digest' ? digestText(call, text, key) : stubLine(call, text, key);
+      stubsAt.set(call.callIndex, [...(stubsAt.get(call.callIndex) ?? []), line]);
+      stubs += 1;
+    }
+  }
+  const shortened = (id: string, text: string, isError: boolean): string =>
+    digestOf.get(id) ?? truncatedResultText(text, isError, headChars);
+
   const kept: Message[] = [];
-  for (const message of messages) {
+  messages.forEach((message, index) => {
+    const ownStubs = stubsAt.get(index);
     const touched =
+      ownStubs !== undefined ||
       message.toolUses.some((tool) => actions.has(tool.tool_use_id)) ||
       (message.toolResults ?? []).some((result) => actions.has(result.tool_use_id));
     if (!touched) {
       kept.push(message);
-      continue;
+      return;
     }
     const toolUses = message.toolUses
       .filter((tool) => actions.get(tool.tool_use_id) !== 'drop_call')
       .map((tool) => {
         if (actions.get(tool.tool_use_id) !== 'drop_result') return tool;
-        const text = truncatedResultText(
-          tool.text ?? '',
-          tool.isError ?? false,
-          headChars,
-        );
+        if (tool.text === undefined) return tool;
+        const text = shortened(tool.tool_use_id, tool.text, tool.isError ?? false);
         if ((tool.text ?? '') === text) return tool;
         const copy: ToolUse = {
           tool_use_id: tool.tool_use_id,
@@ -233,7 +317,7 @@ export function applyDecisions(
       .filter((result) => actions.get(result.tool_use_id) !== 'drop_call')
       .map((result) => {
         if (actions.get(result.tool_use_id) !== 'drop_result') return result;
-        const text = truncatedResultText(result.text, result.isError ?? false, headChars);
+        const text = shortened(result.tool_use_id, result.text, result.isError ?? false);
         return text === result.text
           ? result
           : {
@@ -243,6 +327,7 @@ export function applyDecisions(
             };
       });
     if (
+      ownStubs === undefined &&
       !message.toolUses.some(
         (tool) => actions.get(tool.tool_use_id) === 'drop_call',
       ) &&
@@ -255,16 +340,30 @@ export function applyDecisions(
       )
     ) {
       kept.push(message);
-      continue;
+      return;
     }
-    if (message.text.trim().length === 0 && toolUses.length === 0 && toolResults.length === 0) {
-      continue;
+    const text = ownStubs
+      ? [...(message.text.trim().length > 0 ? [message.text] : []), ...ownStubs].join('\n')
+      : message.text;
+    if (text.trim().length === 0 && toolUses.length === 0 && toolResults.length === 0) {
+      return;
     }
-    const rebuilt: Message = { role: message.role, text: message.text, toolUses };
+    const rebuilt: Message = { role: message.role, text, toolUses };
     if (toolResults.length > 0) rebuilt.toolResults = toolResults;
     kept.push(rebuilt);
-  }
-  return kept;
+  });
+  return { messages: kept, ledger, stubs, digests: digestOf.size };
+}
+
+/** `applyDecisionsWithLedger`, messages only; 'none' unless `stub` says otherwise. */
+export function applyDecisions(
+  messages: readonly Message[],
+  decisions: readonly CallDecision[],
+  calls: readonly ToolCall[],
+  headChars: number,
+  stub: StubOptions = { stubMode: 'none' },
+): Message[] {
+  return applyDecisionsWithLedger(messages, decisions, calls, headChars, stub).messages;
 }
 
 /** Characters of text, tool input and tool output a message holds. */
@@ -319,7 +418,15 @@ export async function compact(
 ): Promise<CompactResult> {
   const started = Date.now();
   const resolved = resolveOptions(options);
-  const calls = collectToolCalls(messages, resolved.preserveRecentMessages);
+  // Recent human turns widen the pinned tail for candidate selection only; the
+  // state keeps `preserveRecentMessages` for its fitting order, so a long
+  // recent window cannot make the history unfittable.
+  const humans = recentHumanTurns(messages, resolved.preserveRecentHumanTurns);
+  const pinnedFromIndex = Math.min(
+    humans.index,
+    Math.max(0, messages.length - resolved.preserveRecentMessages),
+  );
+  const calls = collectToolCalls(messages, messages.length - pinnedFromIndex);
   const candidates = calls.filter((call) => !call.pinned);
   const charsBefore = messages.reduce((sum, message) => sum + messageChars(message), 0);
 
@@ -347,14 +454,16 @@ export async function compact(
   // kept-by-decision calls; it does not judge their content. `maxDropRatio: 1`
   // disables it.
   const refused = guardRefuses(count(decisions, 'kept'), candidates.length, resolved.maxDropRatio);
-  const kept = refused
-    ? [...messages]
-    : applyDecisions(messages, decisions, calls, resolved.truncateHeadChars);
+  const applied: Applied = refused
+    ? { messages: [...messages], ledger: [], stubs: 0, digests: 0 }
+    : applyDecisionsWithLedger(messages, decisions, calls, resolved.truncateHeadChars, resolved);
+  const kept = applied.messages;
   return {
     messages: kept,
     compacted: !refused,
     ...(refused ? { guard: 'max_drop' as const } : {}),
     decisions,
+    ledger: applied.ledger,
     stats: {
       messagesBefore: messages.length,
       messagesAfter: kept.length,
@@ -369,6 +478,10 @@ export async function compact(
       stateStage: fitted.stage,
       requests: batches.length,
       ms: Date.now() - started,
+      stubs: applied.stubs,
+      digests: applied.digests,
+      humanTurnsPinned: humans.count,
+      pinnedFromIndex,
     },
   };
 }

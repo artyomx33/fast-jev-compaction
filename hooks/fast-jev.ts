@@ -9,11 +9,13 @@ import type {
 } from 'claude-code';
 
 import { compact, reductionRatio, resolveOptions } from '../src/compact.js';
+import { ledgerKeys, newLedgerLines } from '../src/digest.js';
 import { buildJevRequest, DEFAULT_MODEL, parseJevResponse } from '../src/request.js';
 import type {
   CompactOptions,
   CompactResult,
   JevAsker,
+  LedgerEntry,
   Message,
   ToolResult,
   ToolUse,
@@ -23,7 +25,15 @@ const HOOK_DEFAULTS = {
   compactAtPercent: 60,
   minReductionRatio: 0.25,
   model: DEFAULT_MODEL,
+  // The idle-compaction protection: Claude Code compacts an idle session
+  // before its prompt cache expires, often right after the person's last
+  // instructions; their recent turns stay verbatim.
+  preserveRecentHumanTurns: 10,
+  stubMode: 'digest' as const,
 };
+
+/** Relative to the home directory, unless the `ledgerDir` option names one. */
+export const LEDGER_SUBDIR = '.claude/state/compaction-ledger';
 
 export type HookFetchInit = {
   method?: string;
@@ -45,6 +55,8 @@ export type HookConfig = CompactOptions & {
   compactAtPercent: number;
   minReductionRatio: number;
   model: string;
+  /** Absolute ledger directory; unset, `$HOME/` + `LEDGER_SUBDIR`. */
+  ledgerDir?: string;
 };
 
 /** Jev normally answers a compaction batch in under 3 s; a stalled origin hangs for 18 s+. */
@@ -103,12 +115,19 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
     'maxRequestTokens',
     'truncateHeadChars',
     'maxDropRatio',
+    'preserveRecentHumanTurns',
   ] as const) {
     const value = options[key];
     if (typeof value === 'number' && Number.isFinite(value)) numbers[key] = value;
   }
+  const stubMode = optionString(options, 'stubMode');
   const config: HookConfig = {
+    preserveRecentHumanTurns: HOOK_DEFAULTS.preserveRecentHumanTurns,
     ...numbers,
+    stubMode:
+      stubMode === 'none' || stubMode === 'line' || stubMode === 'digest'
+        ? stubMode
+        : HOOK_DEFAULTS.stubMode,
     compactAtPercent: optionNumber(options, 'compactAtPercent', HOOK_DEFAULTS.compactAtPercent),
     minReductionRatio: optionNumber(
       options,
@@ -123,6 +142,8 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
   if (apiKey) config.apiKey = apiKey;
   const goal = optionString(options, 'goal');
   if (goal) config.goal = goal;
+  const ledgerDir = optionString(options, 'ledgerDir');
+  if (ledgerDir) config.ledgerDir = ledgerDir;
   return config;
 }
 
@@ -222,6 +243,8 @@ export function summarize(result: CompactResult): string {
     stats.resultsDropped > 0 ? `${stats.resultsDropped} results truncated` : '',
     stats.callsDropped > 0 ? `${stats.callsDropped} call_dropped` : '',
     stats.pinned > 0 ? `${stats.pinned} pinned` : '',
+    stats.stubs + stats.digests > 0 ? `${stats.stubs + stats.digests} digested` : '',
+    stats.humanTurnsPinned > 0 ? `${stats.humanTurnsPinned} human turns kept` : '',
   ].filter(Boolean);
   return `${percent(reductionRatio(result))} reduction; ${
     parts.join(', ') || 'no tool calls'
@@ -263,6 +286,94 @@ export function decisionLogLines(
   );
 }
 
+/** First words of the post-compaction notice; earlier notices are replaced, not stacked. */
+export const NOTICE_PREFIX = '<system-reminder>Compacted by Jev at ';
+
+/** The three-line notice the compacted history ends with. */
+export function compactionNotice(args: {
+  ts: string;
+  results: number;
+  humanTurns: number;
+  ledgerPath: string;
+}): string {
+  return [
+    `${NOTICE_PREFIX}${args.ts}: ${args.results} tool results → digests, ${args.humanTurns} recent human turns kept verbatim,`,
+    `full results in ${args.ledgerPath}.`,
+    'Nothing above is verified until read back this turn.</system-reminder>',
+  ].join('\n');
+}
+
+/** The messages without earlier notices, ending with `notice` as a user message. */
+export function withNotice(messages: readonly SessionMessage[], notice: string): SessionMessage[] {
+  return [
+    ...messages.filter(
+      (message) =>
+        !(
+          message.role === 'user' &&
+          message.text.startsWith(NOTICE_PREFIX) &&
+          message.toolUses.length === 0 &&
+          (message.toolResults ?? []).length === 0
+        ),
+    ),
+    { role: 'user', text: notice, toolUses: [] },
+  ];
+}
+
+/** The `$.fs` subset the ledger writer needs, so it can be driven without an engine. */
+export type LedgerFs = {
+  exists: (path: string) => Promise<boolean>;
+  read: (path: string) => Promise<string>;
+  write: (path: string, text: string) => Promise<void>;
+};
+
+/**
+ * Appends the entries whose key the ledger file does not hold yet. `$.fs`
+ * has no append, so the file is read and written whole; existing lines are
+ * never changed or removed. Returns how many lines were added.
+ */
+export async function appendLedgerFs(
+  fs: LedgerFs,
+  path: string,
+  entries: readonly LedgerEntry[],
+): Promise<number> {
+  if (entries.length === 0) return 0;
+  const existing = (await fs.exists(path)) ? await fs.read(path) : '';
+  const lines = newLedgerLines(entries, ledgerKeys(existing));
+  if (!lines) return 0;
+  const joint = existing.length > 0 && !existing.endsWith('\n') ? '\n' : '';
+  await fs.write(path, `${existing}${joint}${lines}`);
+  return lines.split('\n').length - 1;
+}
+
+/** Writes the ledger and returns the notice's ledger wording (the path, or why there is none). */
+async function writeLedger(
+  $: {
+    env: { get: (name: string) => Promise<string | undefined> };
+    fs: LedgerFs;
+    ui: { log: (text: string) => void };
+  },
+  config: HookConfig,
+  sessionId: string,
+  entries: readonly LedgerEntry[],
+): Promise<string> {
+  const home = config.ledgerDir ? undefined : await $.env.get('HOME');
+  const dir = config.ledgerDir ?? (home ? `${home.replace(/\/$/, '')}/${LEDGER_SUBDIR}` : undefined);
+  if (!dir) {
+    $.ui.log('ledger not written: no ledgerDir and no HOME');
+    return '(no ledger: HOME unknown)';
+  }
+  const path = `${dir}/${sessionId}.jsonl`;
+  try {
+    const added = await appendLedgerFs($.fs, path, entries);
+    $.ui.log(`ledger: ${added} new of ${entries.length} entries in ${path}`);
+    return path;
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    $.ui.log(`ledger write failed (${reason}): ${path}`);
+    return `${path} (write failed: ${reason})`;
+  }
+}
+
 async function getApiKey(
   $: {
     env: { get: (name: string) => Promise<string | undefined> };
@@ -301,7 +412,14 @@ export const register: Register = (on: On, options: PluginOptions) => {
 
   on('session.compact', async ($, event, next) => {
     try {
-      const config = { ...configured, apiKey: await getApiKey($, configured) };
+      const sessionId = await $.session.id();
+      const ts = new Date(await $.clock.now()).toISOString();
+      const config: HookConfig = {
+        ...configured,
+        apiKey: await getApiKey($, configured),
+        sessionId,
+        ledgerTs: ts,
+      };
       const { result, messages } = await compactSession(
         event.messages,
         config,
@@ -325,11 +443,21 @@ export const register: Register = (on: On, options: PluginOptions) => {
         );
         return next(event);
       }
+      const ledgerWhere =
+        config.stubMode === 'none'
+          ? '(no ledger: stubMode none)'
+          : await writeLedger($, config, sessionId, result.ledger);
+      const notice = compactionNotice({
+        ts,
+        results: result.stats.stubs + result.stats.digests,
+        humanTurns: result.stats.humanTurnsPinned,
+        ledgerPath: ledgerWhere,
+      });
       notify(
         $,
         `kept ${messages.length}/${event.messages.length} messages, no summary (${summarize(result)})`,
       );
-      return { messages };
+      return { messages: withNotice(messages, notice) };
     } catch (error) {
       notify(
         $,

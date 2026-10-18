@@ -43,7 +43,7 @@ export interface ToolCall {
   resultIndex: number;
   resultChars: number;
   isError: boolean;
-  /** In the first or the newest preserved messages; never a candidate. */
+  /** In the first or the newest preserved messages (or recent human turns); never a candidate. */
   pinned: boolean;
 }
 
@@ -111,6 +111,44 @@ export interface CompactOptions {
   maxDropRatio?: number;
   /** Wording of the two noul questions. Default 'default'. */
   questionStyle?: QuestionStyle;
+  /**
+   * Also pin everything from the N-th most recent human turn (a user message
+   * with text and no tool_result) to the end: assistant texts, tool calls and
+   * their results stay verbatim. Combined with `preserveRecentMessages`; the
+   * wider window wins. Default 0 (off); the Claude Code hook defaults to 10.
+   */
+  preserveRecentHumanTurns?: number;
+  /**
+   * What a dropped call or result leaves behind. 'digest' (default): 1-3 lines
+   * (tool, input head, outcome, size, agent id, key result lines, ledger key);
+   * 'line': a one-line stub; 'none': nothing (a dropped call vanishes, a
+   * dropped result keeps its truncated head), the upstream behaviour.
+   */
+  stubMode?: StubMode;
+  /** Session id the ledger keys are derived from; '' when absent. */
+  sessionId?: string;
+  /** Timestamp stored in each ledger entry; defaults to now (ISO). */
+  ledgerTs?: string;
+}
+
+/** See `CompactOptions.stubMode`. */
+export type StubMode = 'none' | 'line' | 'digest';
+
+/**
+ * One dropped call's full output, for the per-session ledger
+ * (`<ledgerDir>/<sessionId>.jsonl`, one JSON object per line). The stub or
+ * digest in the compacted history carries `ledger:<key>`.
+ */
+export interface LedgerEntry {
+  key: string;
+  ts: string;
+  session: string;
+  tool_use_id: string;
+  tool: string;
+  input: Record<string, unknown>;
+  /** The full result text, as it was before compaction. */
+  result: string;
+  isError: boolean;
 }
 
 /**
@@ -129,6 +167,10 @@ export interface ResolvedCompactOptions {
   truncateHeadChars: number;
   maxDropRatio: number;
   questionStyle: QuestionStyle;
+  preserveRecentHumanTurns: number;
+  stubMode: StubMode;
+  sessionId: string;
+  ledgerTs: string;
 }
 
 export interface CompactResult {
@@ -142,6 +184,12 @@ export interface CompactResult {
   compacted: boolean;
   /** Set when the max-drop guard refused the compaction. */
   guard?: 'max_drop';
+  /**
+   * Full outputs of the calls whose output the compacted history no longer
+   * holds verbatim, for the caller to append to the ledger. Empty when
+   * `stubMode` is 'none' or the compaction was refused.
+   */
+  ledger: LedgerEntry[];
   stats: {
     messagesBefore: number;
     messagesAfter: number;
@@ -157,6 +205,13 @@ export interface CompactResult {
     stateStage: string;
     requests: number;
     ms: number;
+    /** Dropped calls replaced by a stub ('line') or a digest ('digest'). */
+    stubs: number;
+    /** Dropped results replaced by a digest ('digest' mode). */
+    digests: number;
+    /** Human turns inside the pinned recent window, and the message index it starts at. */
+    humanTurnsPinned: number;
+    pinnedFromIndex: number;
   };
 }
 

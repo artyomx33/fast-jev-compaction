@@ -62,6 +62,9 @@ The plugin declares these `userConfig` values in
 | `truncateHeadChars` | `300` |
 | `maxDropRatio` | `1` (off; use `0.8` for a guarded trial) |
 | `questionStyle` | `'default'` (use `'evidence'` for a trial) |
+| `stubMode` | `'digest'` |
+| `preserveRecentHumanTurns` | `10` |
+| `ledgerDir` | unset: `$HOME/.claude/state/compaction-ledger` |
 | `model` | `jev-latest` |
 
 The TypeSafe key can be supplied as the sensitive `apiKey` plugin option or
@@ -79,9 +82,23 @@ fitted into the state budget, the drop guard refuses the result, or the estimate
 built-in compaction. The outcome is shown as a toast and logged with the
 reduction, per-reason counts, state size and request count; a per-call
 `decisions:` line with both probabilities is logged for diagnosis. The
+ledger is written through `$.fs` (read whole, append new keys, write whole;
+`$.fs` has no append) and the history ends with the three-line post-compaction
+notice described in the root README. The
 `turn.complete` hook requests
 compaction when `context.percent` reaches `compactAtPercent`, with an
 in-flight guard.
+
+## Updating an installed copy
+
+The marketplace source is this GitHub repository; after a merge to `main`:
+
+```sh
+claude plugin marketplace update fleet-jev-compaction
+claude plugin update fast-jev-compaction@fleet-jev-compaction
+```
+
+Restart Claude Code sessions to load the new version.
 
 ## Scope and caveat
 

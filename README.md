@@ -8,7 +8,7 @@ with optional evidence-oriented questions and a candidate-only drop guard.
 Upstream attribution and the MIT license are preserved.
 
 **Status: experimental.** The three reviewed guard/plugin integration defects are fixed;
-41 library/hook tests and type checks pass. A real Claude session continuation test
+94 library/hook tests and type checks pass (0.4.0). A real Claude session continuation test
 is still pending. Publishing this fork does not enable compaction in any agent.
 Codex and other fleet runtimes need separately verified adapters.
 
@@ -154,6 +154,10 @@ put it in a source file.
 | `truncateHeadChars` | `300` | Characters of a tool result shown to Jev as `result_head`, and retained before its note when the result is dropped |
 | `maxDropRatio` | `1` | Quantity guard: refuse the compaction when too few candidates survive (`1` disables) |
 | `questionStyle` | `'default'` | `'evidence'` asks about reproducibility instead of what happens next |
+| `stubMode` | `'digest'` | What a dropped call or result leaves: `'digest'`, `'line'` or `'none'`; see below |
+| `preserveRecentHumanTurns` | `0` (hook: `10`) | Pin everything from the N-th most recent human turn to the end |
+| `sessionId` | `''` | Session id the ledger keys are derived from; `compactMessages` writes the ledger only with one |
+| `ledgerDir` | `~/.claude/state/compaction-ledger` | `compactMessages` and plugin option: where `<sessionId>.jsonl` ledgers go |
 
 `result.stats` reports message and character counts before and after, the
 per-reason decision counts, the state size in estimated tokens, which fitting
@@ -192,6 +196,60 @@ if (!result.compacted) {
 `result.compacted` is `false` and `result.messages` is the input unchanged, so a caller must not treat it
 as a compaction. The Claude Code hook checks `compacted` before anything else and hands the event to
 `next()`, so the native compaction runs — `minReductionRatio` cannot override it.
+
+## No silent drops: stubs, digests and the ledger (0.4.0)
+
+Up to 0.3.3 a dropped call vanished with its result, so a later turn could read
+"dispatching the review now" with no receipt under it. `stubMode` decides what is
+left instead; it is deterministic (built from the call and its result text, no
+model call):
+
+- `'digest'` (default): 1-3 lines in the text of the assistant message that held
+  the call, and in place of a dropped result:
+  ```
+  ~Agent | Research muxin project and security | ok | 1047ch | agent:a6779c2b76fe06ebb | ledger:3f0c1a9e2b4d
+  ~ Async agent launched successfully.
+  ~ output_file: /private/tmp/…/tasks/a6779c2b76fe06ebb.output
+  ```
+  Line one: tool, input head, `ok`/`error` (plus `exit N`), size, the agent id
+  for agent tools (`Agent`, `Task`, `SendMessage`, …, always present, `unknown`
+  when neither result nor input names one), and the ledger key. Then the first
+  non-empty result line and, when there is one, the first other line matching
+  an agentId, PR, invoice, path, hash or number pattern (strongest first).
+- `'line'`: one line, `[pruned Bash "<input head ≤60>" → error exit 1, 812 chars | ledger:…]`;
+  a dropped result keeps its truncated head, its note gains the key.
+- `'none'`: the upstream behaviour (silent drop).
+
+With `'digest'` or `'line'`, every output the compacted history no longer holds
+verbatim is returned in `result.ledger` (key, ts, session, tool_use_id, tool,
+input, full result, isError). `compactMessages` with a `sessionId`, and the
+Claude Code hook, append those entries to `<ledgerDir>/<sessionId>.jsonl`, one
+JSON object per line, skipping keys already there. Ledger files are never
+rewritten or deleted. Read one back with
+`grep '"key":"<key>"' ~/.claude/state/compaction-ledger/<sessionId>.jsonl`.
+
+**Recent human turns (the idle-compaction protection).** Claude Code compacts an
+idle session shortly before its prompt cache expires, often right after the
+person's last instructions and the dispatches that answered them.
+`preserveRecentHumanTurns: N` pins everything from the N-th most recent human
+turn to the end: assistant texts, tool calls and tool results stay verbatim. A
+human turn is a user message with text and no tool_result; task notifications,
+system reminders and local-command output do not count. With fewer than N
+human turns the window starts at the oldest one. The wider of this window and
+`preserveRecentMessages` wins. It only widens candidate selection; the state Jev
+sees is fitted as before. The library default is 0; the Claude Code hook
+defaults to 10. Note: a window that holds every tool call leaves nothing to
+compact, so the hook's `minReductionRatio` check hands the compaction to Claude
+Code's built-in summary.
+
+**Post-compaction notice.** When its compaction stands, the hook ends the
+history with one user message (an earlier one is replaced, not stacked):
+
+```
+<system-reminder>Compacted by Jev at <ts>: <N> tool results → digests, <M> recent human turns kept verbatim,
+full results in <ledger path>.
+Nothing above is verified until read back this turn.</system-reminder>
+```
 
 ## Limitations
 
